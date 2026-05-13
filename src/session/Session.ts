@@ -6,6 +6,14 @@ import {
   type SDKUserMessage,
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
+
+// Shape of the streaming events we care about — a structural subset of
+// Anthropic's BetaRawMessageStreamEvent so we don't have to import its full
+// type tree.
+interface StreamEventLike {
+  type: string;
+  delta?: { type?: string; text?: string };
+}
 import { randomUUID } from "node:crypto";
 import { EventLog } from "../log/EventLog.js";
 import type { CoEvent, CoEventInput } from "../types.js";
@@ -60,6 +68,13 @@ export class Session implements SessionView {
   private participantsListeners = new Set<(p: Participant[]) => void>();
 
   private queueListeners = new Set<(depth: number) => void>();
+
+  // Transient streaming state — not persisted to disk or events array.
+  private streamingText = "";
+  private streamListeners = new Set<(text: string) => void>();
+  private toolProgressListeners = new Set<
+    (p: { toolUseId: string; toolName: string; elapsedSec: number }) => void
+  >();
 
   // Ring buffer cap. Older events live on disk only.
   private static readonly RING_BUFFER_SIZE = 500;
@@ -156,6 +171,45 @@ export class Session implements SessionView {
 
   private notifyQueue(): void {
     for (const l of this.queueListeners) l(this.userQueue.length);
+  }
+
+  onStream(listener: (text: string) => void): () => void {
+    this.streamListeners.add(listener);
+    listener(this.streamingText);
+    return () => {
+      this.streamListeners.delete(listener);
+    };
+  }
+
+  onToolProgress(
+    listener: (p: {
+      toolUseId: string;
+      toolName: string;
+      elapsedSec: number;
+    }) => void,
+  ): () => void {
+    this.toolProgressListeners.add(listener);
+    return () => {
+      this.toolProgressListeners.delete(listener);
+    };
+  }
+
+  getStreamingText(): string {
+    return this.streamingText;
+  }
+
+  private setStreaming(text: string): void {
+    if (this.streamingText === text) return;
+    this.streamingText = text;
+    for (const l of this.streamListeners) l(text);
+  }
+
+  private notifyToolProgress(p: {
+    toolUseId: string;
+    toolName: string;
+    elapsedSec: number;
+  }): void {
+    for (const l of this.toolProgressListeners) l(p);
   }
 
   onJoinRequest(listener: (req: JoinRequest) => void): () => void {
@@ -442,6 +496,7 @@ export class Session implements SessionView {
         options: {
           abortController: this.abortController,
           canUseTool,
+          includePartialMessages: true,
           ...(useResume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
         },
       });
@@ -595,7 +650,27 @@ export class Session implements SessionView {
   }
 
   private handleSdkMessage(msg: SDKMessage): void {
+    if (msg.type === "stream_event") {
+      const e = (msg as unknown as { event: StreamEventLike }).event;
+      this.handleStreamEvent(e);
+      return;
+    }
+    if ((msg as { type: string }).type === "tool_progress") {
+      const tp = msg as unknown as {
+        tool_use_id: string;
+        tool_name: string;
+        elapsed_time_seconds: number;
+      };
+      this.notifyToolProgress({
+        toolUseId: tp.tool_use_id,
+        toolName: tp.tool_name,
+        elapsedSec: tp.elapsed_time_seconds,
+      });
+      return;
+    }
     if (msg.type === "assistant") {
+      // Final assistant message landed — clear streaming buffer.
+      this.setStreaming("");
       const m = (msg as unknown as { message: { content: unknown } }).message;
       const text = extractText(m.content);
       if (text) this.emit({ type: "assistant_message", content: text });
@@ -644,6 +719,19 @@ export class Session implements SessionView {
       subtype: sys.subtype ?? msg.type,
       payload: msg,
     });
+  }
+
+  private handleStreamEvent(e: StreamEventLike): void {
+    if (e.type === "message_start") {
+      this.setStreaming("");
+      return;
+    }
+    if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
+      const text = e.delta.text ?? "";
+      if (text) this.setStreaming(this.streamingText + text);
+      return;
+    }
+    // content_block_start, content_block_stop, message_delta, message_stop — ignore for v1
   }
 
   private emit(event: CoEventInput): void {

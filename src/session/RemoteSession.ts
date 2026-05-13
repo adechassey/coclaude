@@ -38,6 +38,12 @@ export class RemoteSession implements SessionView {
   private participants: Participant[] = [];
   private participantsListeners = new Set<(p: Participant[]) => void>();
 
+  private streamingText = "";
+  private streamListeners = new Set<(text: string) => void>();
+  private toolProgressListeners = new Set<
+    (p: { toolUseId: string; toolName: string; elapsedSec: number }) => void
+  >();
+
   private welcomed = false;
   private opts: RemoteSessionOptions;
 
@@ -141,6 +147,31 @@ export class RemoteSession implements SessionView {
     };
   }
 
+  onStream(listener: (text: string) => void): () => void {
+    this.streamListeners.add(listener);
+    listener(this.streamingText);
+    return () => {
+      this.streamListeners.delete(listener);
+    };
+  }
+
+  onToolProgress(
+    listener: (p: {
+      toolUseId: string;
+      toolName: string;
+      elapsedSec: number;
+    }) => void,
+  ): () => void {
+    this.toolProgressListeners.add(listener);
+    return () => {
+      this.toolProgressListeners.delete(listener);
+    };
+  }
+
+  getStreamingText(): string {
+    return this.streamingText;
+  }
+
   close(): void {
     try {
       this.ws.close();
@@ -204,6 +235,24 @@ export class RemoteSession implements SessionView {
     if (msg.type === "participants") {
       this.participants = msg.participants;
       for (const l of this.participantsListeners) l(this.participants);
+      return;
+    }
+    if (msg.type === "stream") {
+      if (msg.reset) {
+        this.streamingText = msg.delta ?? "";
+      } else if (msg.delta !== undefined) {
+        this.streamingText = this.streamingText + msg.delta;
+      }
+      for (const l of this.streamListeners) l(this.streamingText);
+      return;
+    }
+    if (msg.type === "tool_progress") {
+      const update = {
+        toolUseId: msg.toolUseId,
+        toolName: msg.toolName,
+        elapsedSec: msg.elapsedSec,
+      };
+      for (const l of this.toolProgressListeners) l(update);
       return;
     }
     // pong / unknown — ignore
