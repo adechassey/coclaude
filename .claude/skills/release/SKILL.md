@@ -1,7 +1,7 @@
 ---
 name: release
 description: Cut a release. Bumps version files, commits, tags, pushes. Handles semver (patch/minor/major) or explicit versions. Works across Node, Rust, Python, and ad-hoc version files.
-allowed-tools: Bash(git *) Bash(gh *) Bash(jq *) Bash(cat *) Bash(grep *) Bash(ls *) Read Edit Write
+allowed-tools: Bash(git *) Bash(gh *) Bash(jq *) Bash(cat *) Bash(grep *) Bash(ls *) Bash(curl *) Bash(node *) Read Edit Write
 ---
 
 ## Current state
@@ -33,6 +33,7 @@ The user wants to cut a release. Argument $1 is one of:
    - On a non-default branch (warn and confirm; some projects do release branches)
    - Local branch behind origin (pull or warn)
    - Tag for the target version already exists (always abort — don't retag)
+   - **npm name collision** (Node projects only): if a `package.json` exists and isn't marked `"private": true`, query the npm registry — `curl -fsS -o /dev/null -w '%{http_code}' https://registry.npmjs.org/<name>/<NEW>`. A `200` means that version is already published and any CI `npm publish` will fail later. Abort early; ask the user to bump further. A `404` means it's free to publish.
 
 2. **Discover version-bearing files**. Be thorough; many projects have more than one:
    - `package.json` (top-level `version`)
@@ -43,7 +44,7 @@ The user wants to cut a release. Argument $1 is one of:
 
    If none found, ask the user where the version lives. Don't guess.
 
-3. **Read current versions** from every discovered source. If they disagree, surface the disagreement and stop — the user has to fix the inconsistency first.
+3. **Read current versions** from every discovered source. Compare *base versions only* — a pre-release / build-metadata suffix (anything after `-` or `+` per semver) is intentional template-marking (e.g. `src/version.ts` may carry `0.1.0-dev` so from-source builds report something distinct from the npm-published `0.1.0`). Treat `X.Y.Z` and `X.Y.Z-<suffix>` as agreeing on `X.Y.Z`. Only stop if the base versions actually differ — then surface the disagreement and ask the user to fix it.
 
 4. **Compute new version**:
    - For `patch` / `minor` / `major`, apply the semver bump (drop any pre-release / build metadata).
@@ -59,6 +60,7 @@ The user wants to cut a release. Argument $1 is one of:
    - If a release workflow file exists in `.github/workflows/`, print:
      - The release page: `https://github.com/<owner>/<repo>/releases/tag/v<NEW>` (won't exist yet — CI creates it)
      - The Actions page: `https://github.com/<owner>/<repo>/actions`
+     - For Node projects (non-private `package.json`): the eventual npm page `https://www.npmjs.com/package/<name>/v/<NEW>` (404s until CI publishes).
    - If `gh` is on PATH, offer (don't force) to `gh run watch` the just-triggered run.
 
 ## Constraints
