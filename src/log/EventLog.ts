@@ -6,6 +6,7 @@ import type { CoEvent, CoEventInput } from "../types.js";
 export class EventLog {
   private stream: fs.WriteStream;
   private nextSeq = 0;
+  private closed = false;
 
   constructor(
     public readonly sessionId: string,
@@ -13,6 +14,9 @@ export class EventLog {
   ) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     this.stream = fs.createWriteStream(logPath, { flags: "a" });
+    // Don't crash the process if the stream errors during shutdown; emit()
+    // already guards against writes after close, this is belt-and-suspenders.
+    this.stream.on("error", () => {});
   }
 
   static defaultPath(sessionId: string): string {
@@ -21,11 +25,15 @@ export class EventLog {
 
   append(event: CoEventInput): CoEvent {
     const full = { ...event, seq: this.nextSeq++, ts: Date.now() } as CoEvent;
-    this.stream.write(JSON.stringify(full) + "\n");
+    if (!this.closed) {
+      this.stream.write(JSON.stringify(full) + "\n");
+    }
     return full;
   }
 
   close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    this.closed = true;
     return new Promise((resolve) => this.stream.end(() => resolve()));
   }
 }

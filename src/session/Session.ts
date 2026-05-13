@@ -194,17 +194,16 @@ export class Session implements SessionView {
         this.handleSdkMessage(message);
       }
     } catch (err: unknown) {
+      // Any error during/after our own stop() is expected — the SDK throws
+      // out of the iterator when we abort. Swallow silently in that case.
+      if (this.closed) return;
       const e = err as { name?: string; message?: string };
-      if (e?.name === "AbortError") {
-        this.emit({ type: "system", subtype: "aborted" });
-      } else {
-        this.emit({
-          type: "system",
-          subtype: "error",
-          payload: { message: e?.message ?? String(err) },
-        });
-        throw err;
-      }
+      this.emit({
+        type: "system",
+        subtype: "error",
+        payload: { message: e?.message ?? String(err) },
+      });
+      throw err;
     }
   }
 
@@ -261,6 +260,7 @@ export class Session implements SessionView {
   }
 
   private emit(event: CoEventInput): void {
+    if (this.closed) return;
     const full = this.eventLog.append(event);
     this.events.push(full);
     for (const l of this.listeners) l(full);
