@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { Box } from "ink";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
-import type { SessionView, JoinRequest } from "../session/SessionView.js";
+import type {
+  SessionView,
+  JoinRequest,
+  ToolApprovalRequest,
+} from "../session/SessionView.js";
 import type { CoEvent } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
 import { Conversation } from "./Conversation.js";
 import { ComposeBox } from "./ComposeBox.js";
 import { StatusBar } from "./StatusBar.js";
 import { JoinApproval } from "./JoinApproval.js";
+import { ToolApproval } from "./ToolApproval.js";
 
 interface Props {
   session: SessionView;
@@ -25,6 +30,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
     session.getSlashCommands(),
   );
   const [pendingJoins, setPendingJoins] = useState<JoinRequest[]>([]);
+  const [pendingTools, setPendingTools] = useState<ToolApprovalRequest[]>([]);
 
   useEffect(() => {
     const offEvents = session.on((event) => {
@@ -43,18 +49,23 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
     const offJoinReq = session.onJoinRequest((req) => {
       setPendingJoins((prev) => [...prev, req]);
     });
+    const offToolReq = session.onToolApproval((req) => {
+      setPendingTools((prev) => [...prev, req]);
+    });
     return () => {
       offEvents();
       offCommands();
       offParticipants();
       offJoinReq();
+      offToolReq();
     };
   }, [session]);
 
   // Author prefix on history items appears the moment a second participant arrives.
   const showAuthorPrefix = participants.length > 0;
   const currentJoin = pendingJoins[0];
-  const composeDisabled = thinking || !!currentJoin;
+  const currentTool = pendingTools[0];
+  const composeDisabled = thinking || !!currentJoin || !!currentTool;
 
   return (
     <Box flexDirection="column">
@@ -79,6 +90,16 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
           onResolved={() =>
             setPendingJoins((prev) =>
               prev.filter((r) => r.id !== currentJoin.id),
+            )
+          }
+        />
+      )}
+      {!currentJoin && currentTool && (
+        <ToolApproval
+          request={currentTool}
+          onResolved={() =>
+            setPendingTools((prev) =>
+              prev.filter((r) => r.id !== currentTool.id),
             )
           }
         />

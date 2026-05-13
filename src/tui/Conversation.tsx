@@ -75,6 +75,65 @@ const EventLine: React.FC<{
         </Box>
       );
     case "system":
+      return renderSystem(event);
+  }
+};
+
+function renderSystem(
+  event: Extract<CoEvent, { type: "system" }>,
+): React.ReactElement | null {
+  const payload = event.payload as Record<string, unknown> | undefined;
+  switch (event.subtype) {
+    case "scope_changed":
+      return (
+        <Box>
+          <Text dimColor>
+            · {String(payload?.["by"])} set {String(payload?.["name"])}'s scope
+            to {String(payload?.["scope"])}
+          </Text>
+        </Box>
+      );
+    case "kicked":
+      return (
+        <Box>
+          <Text dimColor>
+            · {String(payload?.["by"])} kicked {String(payload?.["name"])}
+          </Text>
+        </Box>
+      );
+    case "tool_denied":
+      return (
+        <Box>
+          <Text color="red">
+            ✗ denied {String(payload?.["author"])}'s {String(payload?.["toolName"])}{" "}
+            {payload?.["reason"] ? `(${String(payload["reason"])})` : ""}
+          </Text>
+        </Box>
+      );
+    case "command_error":
+      return (
+        <Box>
+          <Text color="red">⚠ {String(payload?.["message"])}</Text>
+        </Box>
+      );
+    case "who": {
+      const rows = (payload?.["rows"] as Array<{
+        name: string;
+        scope: string;
+      }>) ?? [];
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>· participants:</Text>
+          {rows.map((r) => (
+            <Text key={r.name} dimColor>
+              {"    "}
+              {r.name} — {r.scope}
+            </Text>
+          ))}
+        </Box>
+      );
+    }
+    default:
       return null;
   }
 };
