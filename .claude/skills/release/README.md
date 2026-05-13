@@ -15,11 +15,11 @@ Cut a release with one command. Bumps version files, commits, tags, and pushes �
 
 ## What it does
 
-1. **Preflight** — checks clean tree, branch, remote sync, no duplicate tag.
+1. **Preflight** — checks clean tree, branch, remote sync, no duplicate tag. For non-private `package.json` projects, also pings the npm registry so we fail early instead of letting CI's `pnpm publish` fail after the GH release is already made.
 2. **Discovers version files** — Node (`package.json`), TS/JS (`src/version.ts`), Rust (`Cargo.toml`), Python (`pyproject.toml`, `__version__`). Refuses if none found.
-3. **Bumps + commits + tags** — single Conventional Commits bump, annotated tag, no force-push.
+3. **Bumps + commits + tags** — single Conventional Commits bump, annotated tag, no force-push. When version files have pre-release suffixes like `0.1.0-dev` (intentional template markers), they're treated as agreeing with `0.1.0` so the agreement check doesn't false-fire.
 4. **Pushes commits then tags separately** — so a pre-push hook failure doesn't leave a tag stranded.
-5. **Prints CI links** — Actions URL and release URL once the workflow file is detected.
+5. **Prints CI links** — Actions URL, GH release URL, and (for Node projects) the eventual npm package URL.
 
 ## Project conventions it understands
 
