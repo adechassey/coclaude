@@ -1,0 +1,32 @@
+{
+  "name": "coclaude",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Multiplayer Claude Code",
+  "bin": {
+    "coclaude": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p . && chmod +x dist/cli.js",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.0.9",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.140",
+    "commander": "^14.0.3",
+    "ink": "^7.0.3",
+    "react": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "@types/react": "^19.2.14",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
