@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Cross-compile binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Cross-compile
+        run: |
+          set -e
+          mkdir -p dist-bin
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Building coclaude $VERSION"
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+            name="coclaude-${target}"
+            if [ "$target" = "windows-x64" ]; then
+              name="${name}.exe"
+            fi
+            echo "→ $name"
+            bun build \
+              --compile \
+              --minify \
+              --target="bun-${target}" \
+              --define "process.env.COCLAUDE_VERSION='\"$VERSION\"'" \
+              ./src/cli.ts \
+              --outfile "dist-bin/${name}"
+          done
+          ls -la dist-bin
+
+      - name: Generate checksums
+        run: |
+          cd dist-bin
+          shasum -a 256 coclaude-* > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-bin/coclaude-*
+            dist-bin/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
