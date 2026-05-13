@@ -186,6 +186,15 @@ function handleConnection(
                 send({ type: "participants", participants }),
               ),
             );
+            // If the host kicks this participant, close our connection.
+            cleanups.push(
+              session.onKick((kickedName) => {
+                if (kickedName === joinerName) {
+                  send({ type: "denied", reason: "kicked by host" });
+                  ws.close(1000, "kicked");
+                }
+              }),
+            );
           } else {
             deny(reason ?? "join denied by host");
           }
