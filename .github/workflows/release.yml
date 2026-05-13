@@ -33,12 +33,16 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Stamp version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "export const VERSION = \"$VERSION\";" > src/version.ts
+          cat src/version.ts
+
       - name: Cross-compile
         run: |
           set -e
           mkdir -p dist-bin
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "Building coclaude $VERSION"
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
             name="coclaude-${target}"
             if [ "$target" = "windows-x64" ]; then
@@ -49,7 +53,6 @@ jobs:
               --compile \
               --minify \
               --target="bun-${target}" \
-              --define "process.env.COCLAUDE_VERSION='\"$VERSION\"'" \
               ./src/cli.ts \
               --outfile "dist-bin/${name}"
           done

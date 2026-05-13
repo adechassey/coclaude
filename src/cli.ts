@@ -3,10 +3,7 @@ import { Command } from "commander";
 import { startHost } from "./host.js";
 import { startJoin } from "./join.js";
 import { runSelfUpdate } from "./selfUpdate.js";
-
-// Bun's `--define` flag in CI replaces this with the tag at build time. When
-// running from source it stays "0.0.1-dev".
-const VERSION = process.env["COCLAUDE_VERSION"] ?? "0.0.1-dev";
+import { VERSION } from "./version.js";
 
 const program = new Command();
 
