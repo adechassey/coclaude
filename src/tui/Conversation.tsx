@@ -217,12 +217,10 @@ function renderSystem(
           <Text color="red">⚠ {String(payload?.["message"])}</Text>
         </Box>
       );
-    case "rate_limit_event":
-      return (
-        <Box>
-          <Text color="yellow">⏳ rate limit hit — slowing down</Text>
-        </Box>
-      );
+    // rate_limit_event is routine SDK telemetry — most fire with
+    // status:"allowed" as a heartbeat. The disk log captures them all for
+    // debugging; we render nothing until we know a specific signal worth
+    // surfacing in the conversation.
     case "who": {
       const rows = (payload?.["rows"] as Array<{
         name: string;
