@@ -16,6 +16,7 @@ interface StreamEventLike {
 }
 import { randomUUID } from "node:crypto";
 import { EventLog } from "../log/EventLog.js";
+import { findClaudeExecutable } from "../findClaude.js";
 import type { CoEvent, CoEventInput } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
 import type {
@@ -491,12 +492,19 @@ export class Session implements SessionView {
       // resume it (post-interrupt). If the user passed --resume, treat it
       // the same as a post-interrupt resume.
       const useResume = !this.firstQuery || !!this.resumeSessionId;
+      // `bun --compile` doesn't bundle the SDK's platform-specific native
+      // binary, so for compiled-binary distributions we point the SDK at
+      // the user's installed `claude` CLI instead. When this returns null
+      // (no claude on PATH), the SDK falls back to its bundled binary,
+      // which works for `pnpm dev` and fails loudly otherwise.
+      const claudePath = findClaudeExecutable();
       const q = query({
         prompt: this.userStream(),
         options: {
           abortController: this.abortController,
           canUseTool,
           includePartialMessages: true,
+          ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
           ...(useResume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
         },
       });
