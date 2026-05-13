@@ -5,13 +5,23 @@ import type { CoEvent } from "../types.js";
 interface Props {
   events: CoEvent[];
   showAuthorPrefix: boolean;
+  myName: string;
 }
 
-export const Conversation: React.FC<Props> = ({ events, showAuthorPrefix }) => {
+export const Conversation: React.FC<Props> = ({
+  events,
+  showAuthorPrefix,
+  myName,
+}) => {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
       {events.map((e) => (
-        <EventLine key={e.seq} event={e} showAuthorPrefix={showAuthorPrefix} />
+        <EventLine
+          key={e.seq}
+          event={e}
+          showAuthorPrefix={showAuthorPrefix}
+          myName={myName}
+        />
       ))}
     </Box>
   );
@@ -20,17 +30,22 @@ export const Conversation: React.FC<Props> = ({ events, showAuthorPrefix }) => {
 const EventLine: React.FC<{
   event: CoEvent;
   showAuthorPrefix: boolean;
-}> = ({ event, showAuthorPrefix }) => {
+  myName: string;
+}> = ({ event, showAuthorPrefix, myName }) => {
   switch (event.type) {
-    case "user_prompt":
+    case "user_prompt": {
+      const mine = event.author === myName;
       return (
         <Box>
           {showAuthorPrefix && (
-            <Text color="cyan">[{event.author}] </Text>
+            <Text color={mine ? "cyan" : "magenta"} bold={mine}>
+              [{event.author}]{" "}
+            </Text>
           )}
           <Text>{event.content}</Text>
         </Box>
       );
+    }
     case "assistant_message":
       return (
         <Box>

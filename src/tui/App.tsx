@@ -1,24 +1,30 @@
 import React, { useEffect, useState } from "react";
 import { Box } from "ink";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
-import type { Session } from "../session/Session.js";
+import type { SessionView, JoinRequest } from "../session/SessionView.js";
 import type { CoEvent } from "../types.js";
+import type { Participant } from "../wire/protocol.js";
 import { Conversation } from "./Conversation.js";
 import { ComposeBox } from "./ComposeBox.js";
 import { StatusBar } from "./StatusBar.js";
+import { JoinApproval } from "./JoinApproval.js";
 
 interface Props {
-  session: Session;
+  session: SessionView;
+  joinUrl?: string;
 }
 
-export const App: React.FC<Props> = ({ session }) => {
+export const App: React.FC<Props> = ({ session, joinUrl }) => {
   const [events, setEvents] = useState<CoEvent[]>([]);
   const [thinking, setThinking] = useState(false);
-  const [connected] = useState(0); // milestone 2 will wire this up
+  const [participants, setParticipants] = useState<Participant[]>(
+    session.getParticipants(),
+  );
   const [lastCostUsd, setLastCostUsd] = useState<number | undefined>(undefined);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(
     session.getSlashCommands(),
   );
+  const [pendingJoins, setPendingJoins] = useState<JoinRequest[]>([]);
 
   useEffect(() => {
     const offEvents = session.on((event) => {
@@ -33,28 +39,53 @@ export const App: React.FC<Props> = ({ session }) => {
       }
     });
     const offCommands = session.onSlashCommands(setSlashCommands);
+    const offParticipants = session.onParticipants(setParticipants);
+    const offJoinReq = session.onJoinRequest((req) => {
+      setPendingJoins((prev) => [...prev, req]);
+    });
     return () => {
       offEvents();
       offCommands();
+      offParticipants();
+      offJoinReq();
     };
   }, [session]);
 
   // Author prefix on history items appears the moment a second participant arrives.
-  const showAuthorPrefix = connected > 0;
+  const showAuthorPrefix = participants.length > 0;
+  const currentJoin = pendingJoins[0];
+  const composeDisabled = thinking || !!currentJoin;
 
   return (
     <Box flexDirection="column">
       <StatusBar
         hostName={session.hostName}
+        myName={session.myName}
+        isHost={session.isHost}
         sessionId={session.sessionId}
         thinking={thinking}
-        connected={connected}
+        participants={participants}
+        {...(joinUrl ? { joinUrl } : {})}
         {...(lastCostUsd !== undefined ? { lastCostUsd } : {})}
       />
-      <Conversation events={events} showAuthorPrefix={showAuthorPrefix} />
+      <Conversation
+        events={events}
+        showAuthorPrefix={showAuthorPrefix}
+        myName={session.myName}
+      />
+      {currentJoin && (
+        <JoinApproval
+          request={currentJoin}
+          onResolved={() =>
+            setPendingJoins((prev) =>
+              prev.filter((r) => r.id !== currentJoin.id),
+            )
+          }
+        />
+      )}
       <ComposeBox
         onSubmit={(content) => session.submitPrompt(content)}
-        disabled={thinking}
+        disabled={composeDisabled}
         placeholder="type a message and press enter — / for commands"
         slashCommands={slashCommands}
       />
