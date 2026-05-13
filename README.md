@@ -1,5 +1,8 @@
 # coclaude
 
+[![npm version](https://img.shields.io/npm/v/coclaude.svg)](https://www.npmjs.com/package/coclaude)
+[![license](https://img.shields.io/npm/l/coclaude.svg)](./LICENSE)
+
 Multiplayer Claude Code. Pair-program with teammates inside the same Claude Code session.
 
 ## What it is
@@ -31,7 +34,7 @@ Today, AI-assisted coding is single-player. Two devs working with Claude togethe
 
 ## Status
 
-Early alpha. Solo + 2–3 person collaboration works. See [PLAN.md](./PLAN.md) for the design and the milestone status.
+Early alpha. Solo + 2–3 person collaboration works. Published on [npm](https://www.npmjs.com/package/coclaude) and as cross-platform binaries on the [Releases](https://github.com/adechassey/coclaude/releases) page. See [PLAN.md](./PLAN.md) for the design and the milestone status.
 
 What's working today:
 
@@ -100,6 +103,9 @@ coclaude host --resume <session-id>
 # Join a session
 coclaude join ws://host:port/s/<token>
 coclaude join --name bob ws://host:port/s/<token>
+
+# Update to the latest binary release (when installed via curl|sh)
+coclaude self-update
 ```
 
 The host's status bar prints the join URL on startup. Pass it to teammates.
@@ -152,4 +158,4 @@ For the full design and milestone plan, see [PLAN.md](./PLAN.md).
 
 ## License
 
-TBD
+MIT — see [LICENSE](./LICENSE).
