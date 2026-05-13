@@ -52,10 +52,16 @@ Not yet:
 
 ## Install
 
-Currently from source. Requires Node 22+ and pnpm.
+Once binaries are published, the install script will set you up:
 
 ```bash
-git clone <repo>
+curl -fsSL https://raw.githubusercontent.com/adechassey/coclaude/main/install.sh | bash
+```
+
+To install from source (current default until v0.1.0 is tagged):
+
+```bash
+git clone git@github.com:adechassey/coclaude.git
 cd coclaude
 pnpm install
 pnpm build         # produces ./dist/cli.js

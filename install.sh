@@ -2,24 +2,18 @@
 # coclaude installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/adechassey/coclaude/main/install.sh | bash
 #
 # Environment overrides:
-#   COCLAUDE_REPO       GitHub repo in "owner/repo" form (default: see REPO below)
+#   COCLAUDE_REPO       GitHub repo in "owner/repo" form (default: adechassey/coclaude)
 #   COCLAUDE_VERSION    Specific version tag to install (default: latest)
 #   COCLAUDE_INSTALL    Install directory (default: $HOME/.local/bin)
 
 set -euo pipefail
 
-REPO="${COCLAUDE_REPO:-OWNER/REPO}"
+REPO="${COCLAUDE_REPO:-adechassey/coclaude}"
 VERSION="${COCLAUDE_VERSION:-latest}"
 INSTALL_DIR="${COCLAUDE_INSTALL:-$HOME/.local/bin}"
-
-if [ "$REPO" = "OWNER/REPO" ]; then
-  echo "error: this install script ships with a placeholder repo." >&2
-  echo "Set COCLAUDE_REPO=owner/repo or edit the script before running." >&2
-  exit 1
-fi
 
 # Detect OS
 case "$(uname -s)" in

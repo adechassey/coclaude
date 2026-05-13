@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { pipeline } from "node:stream/promises";
 
-const DEFAULT_REPO = process.env["COCLAUDE_REPO"] ?? "OWNER/REPO";
+const DEFAULT_REPO = process.env["COCLAUDE_REPO"] ?? "adechassey/coclaude";
 
 interface ReleaseAsset {
   name: string;
@@ -18,12 +18,6 @@ interface ReleaseInfo {
 
 export async function runSelfUpdate(currentVersion: string): Promise<void> {
   const repo = DEFAULT_REPO;
-  if (repo === "OWNER/REPO") {
-    console.error(
-      "error: COCLAUDE_REPO not configured. Set it to the GitHub repo (owner/name).",
-    );
-    process.exit(1);
-  }
 
   // Refuse to self-update when running from source — there's no compiled
   // binary to replace.
