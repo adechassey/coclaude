@@ -17,6 +17,7 @@ export interface HostOptions {
   resume?: string;
   bind?: string;
   port?: number;
+  token?: string;
   tunnel?: boolean;
 }
 
@@ -27,7 +28,7 @@ export async function startHost(opts: HostOptions = {}): Promise<void> {
     ...(opts.resume ? { resumeSessionId: opts.resume } : {}),
   });
 
-  const token = generateToken();
+  const token = opts.token ?? generateToken();
   const server = await startServer({
     session,
     token,

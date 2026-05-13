@@ -20,6 +20,10 @@ program
   .option("--bind <host>", "Interface to bind the WS server to", "127.0.0.1")
   .option("--port <port>", "Port to bind (0 = random)", (v) => parseInt(v, 10))
   .option(
+    "--token <token>",
+    "Use a specific join token instead of a random one (useful for demos/scripting)",
+  )
+  .option(
     "--tunnel",
     "Expose the session publicly via cloudflared (requires cloudflared installed)",
   )
@@ -29,6 +33,7 @@ program
       resume?: string;
       bind?: string;
       port?: number;
+      token?: string;
       tunnel?: boolean;
     }) => {
       await startHost({
@@ -36,6 +41,7 @@ program
         ...(opts.resume ? { resume: opts.resume } : {}),
         ...(opts.bind ? { bind: opts.bind } : {}),
         ...(opts.port !== undefined ? { port: opts.port } : {}),
+        ...(opts.token ? { token: opts.token } : {}),
         ...(opts.tunnel ? { tunnel: true } : {}),
       });
     },
