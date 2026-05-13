@@ -22,6 +22,7 @@ export type ClientMessage =
       since?: number;
     }
   | { type: "submit"; content: string }
+  | { type: "interrupt"; reason?: string }
   | { type: "ping" };
 
 // Server → Client

@@ -11,6 +11,7 @@ export type CoEvent =
   | ToolCallEvent
   | ToolResultEvent
   | ResultEvent
+  | InterruptedEvent
   | SystemEvent;
 
 export interface BaseEvent {
@@ -50,6 +51,12 @@ export interface ResultEvent extends BaseEvent {
   durationMs: number;
   totalCostUsd: number;
   numTurns: number;
+}
+
+export interface InterruptedEvent extends BaseEvent {
+  type: "interrupted";
+  by: string;
+  reason?: string;
 }
 
 export interface SystemEvent extends BaseEvent {
