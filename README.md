@@ -27,36 +27,98 @@ Today, AI-assisted coding is single-player. Two devs working with Claude togethe
 - **Scoped approvals for non-host authors.** Joiners are admitted with a scope: `readonly`, `edits`, `bash`, or `unrestricted` (default `readonly`). Tool calls inside scope auto-approve; outside-scope tool calls trigger a prompt on the host's TUI with a 60s auto-deny.
 - **Host approves every join.** The session has a shared token, but admission is a yes/no decision by the host (`[a]pprove / [d]eny / [s]cope / [r]emember`).
 - **Resumable sessions.** The disk-persisted event log is also the on-wire format and the audit trail. `coclaude host --resume <session-id>` picks up where you left off.
+- **Live streaming.** Claude's text streams in as it's generated; in-flight tool calls tick with elapsed time; tool results show a preview.
 
 ## Status
 
-Pre-alpha. The design has been ground out (see [PLAN.md](./PLAN.md)) but no code is written yet.
+Early alpha. Solo + 2-3 person collaboration works. No published binary yet — run from source for now. See [PLAN.md](./PLAN.md) for the design and the milestone status.
 
-## Install (planned)
+What's working today:
 
-Primary path is a single self-contained binary:
+- Host an SDK-driven Claude Code session with a coclaude TUI
+- Join from another terminal over loopback or any tunnel of your choice
+- Per-join host approval, scoped tool-call approval for joiners
+- `/grant`, `/revoke`, `/kick`, `/who` slash commands
+- FIFO queue, interrupts (Esc), session resume from disk log
+- `--tunnel` (cloudflared quick tunnel for cross-network joiners)
+- Streaming text, tool progress, multi-line input, prompt history
+
+Not yet:
+
+- Published binary / install script (build & run from source)
+- Self-update flow
+- Auto-reconnect on dropped joiner connection
+- Web/native clients (wire protocol is ready; no client built yet)
+
+## Install
+
+Currently from source. Requires Node 22+ and pnpm.
 
 ```bash
-curl -fsSL https://github.com/<...>/coclaude/install.sh | sh
+git clone <repo>
+cd coclaude
+pnpm install
+pnpm build         # produces ./dist/cli.js
 ```
 
-`npx coclaude` will also work as a secondary discovery path.
+Then either invoke directly:
 
-## Usage (planned)
+```bash
+./dist/cli.js host
+```
+
+Or via the dev runner:
+
+```bash
+pnpm dev host
+```
+
+## Usage
 
 ```bash
 # Host a session — feels like Claude Code with a status bar
 coclaude host
 
-# Host and expose publicly via cloudflared
+# Host and bind to your tailnet IP so teammates can connect
+coclaude host --bind 100.x.x.x
+
+# Host and expose publicly via cloudflared (requires `cloudflared` on PATH)
 coclaude host --tunnel
 
-# Join a session
-coclaude join wss://abc.trycloudflare.com/?token=...
+# Use a fixed port
+coclaude host --port 7777
 
 # Resume yesterday's session
 coclaude host --resume <session-id>
+
+# Join a session
+coclaude join ws://host:port/s/<token>
+coclaude join --name bob ws://host:port/s/<token>
 ```
+
+The host's status bar prints the join URL on startup. Pass it to teammates.
+
+### Host slash commands
+
+| Command | What it does |
+|---|---|
+| `/grant <name> <scope>` | Promote a participant. Scopes: `readonly`, `edits`, `bash`, `unrestricted`. |
+| `/revoke <name>` | Demote a participant back to `readonly`. |
+| `/kick <name>` | Disconnect a participant. |
+| `/who` | List host + all participants and their current scopes. |
+
+Anything else starting with `/` is a Claude Code slash command and is passed through to the SDK.
+
+### Key bindings
+
+| Key | Action |
+|---|---|
+| Enter | Submit prompt |
+| Ctrl+J | Insert newline (multi-line prompt) |
+| Esc | Interrupt the in-flight Claude turn |
+| ↑ / ↓ | Cycle through your prompt history (when the slash picker is closed) |
+| Tab | Autocomplete the highlighted slash command |
+| Ctrl+C | Exit |
 
 ## Security model
 
@@ -64,7 +126,7 @@ Joining a `coclaude` session means Claude can run tools on the host's machine on
 
 - Default-deny: every joiner starts in `readonly` scope; promotion is explicit and per-joiner.
 - Host approves every join, not just every token bearer.
-- Every tool call is logged with the requesting author's name.
+- Every tool call is logged with the requesting author's name (in `~/.coclaude/sessions/<id>.jsonl`).
 - The host's `settings.json` allow-lists apply only to host-authored turns, never to joiners.
 - Loopback bind by default — network exposure requires explicit `--bind` or `--tunnel`.
 
