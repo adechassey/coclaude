@@ -7,6 +7,7 @@ interface Props {
   disabled?: boolean;
   placeholder?: string;
   slashCommands?: SlashCommand[];
+  history?: string[];
 }
 
 export const ComposeBox: React.FC<Props> = ({
@@ -14,13 +15,18 @@ export const ComposeBox: React.FC<Props> = ({
   disabled,
   placeholder,
   slashCommands = [],
+  history = [],
 }) => {
   const [value, setValue] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // -1 means "not navigating history; current draft"; otherwise index from
+  // the end of the history array (0 = most recent).
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const [draftBeforeHistory, setDraftBeforeHistory] = useState("");
   const { exit } = useApp();
 
   const showPicker = value.startsWith("/") && slashCommands.length > 0;
-  const query = value.slice(1).toLowerCase(); // strip leading /
+  const query = value.slice(1).toLowerCase();
   const matches = showPicker
     ? slashCommands
         .filter((c) => {
@@ -42,7 +48,7 @@ export const ComposeBox: React.FC<Props> = ({
     }
     if (disabled) return;
 
-    // Slash-command picker controls
+    // Slash-command picker
     if (showPicker && matches.length > 0) {
       if (key.upArrow) {
         setSelectedIndex((i) => Math.max(0, i - 1));
@@ -59,22 +65,68 @@ export const ComposeBox: React.FC<Props> = ({
       }
     }
 
+    // Prompt history (only when picker is closed). Up/Down cycle through
+    // prior submissions. Going past the newest goes back to the draft.
+    if (!showPicker && history.length > 0) {
+      if (key.upArrow) {
+        setHistoryIndex((i) => {
+          const next = i < 0 ? 0 : Math.min(i + 1, history.length - 1);
+          if (i < 0) setDraftBeforeHistory(value);
+          const idx = history.length - 1 - next;
+          setValue(history[idx] ?? "");
+          return next;
+        });
+        return;
+      }
+      if (key.downArrow) {
+        setHistoryIndex((i) => {
+          if (i < 0) return -1;
+          const next = i - 1;
+          if (next < 0) {
+            setValue(draftBeforeHistory);
+            return -1;
+          }
+          const idx = history.length - 1 - next;
+          setValue(history[idx] ?? "");
+          return next;
+        });
+        return;
+      }
+    }
+
+    // Multi-line: Ctrl+J or a raw \n insert a newline. Plain Enter submits.
+    const wantsNewline =
+      (key.ctrl && (input === "j" || input === "\n")) || input === "\n";
+    if (wantsNewline) {
+      setValue((v) => v + "\n");
+      setHistoryIndex(-1);
+      return;
+    }
+
     if (key.return) {
       const trimmed = value.trim();
       if (trimmed) {
         onSubmit(trimmed);
         setValue("");
         setSelectedIndex(0);
+        setHistoryIndex(-1);
+        setDraftBeforeHistory("");
       }
       return;
     }
     if (key.backspace || key.delete) {
       setValue((v) => v.slice(0, -1));
+      setHistoryIndex(-1);
       return;
     }
     if (key.meta || key.ctrl) return;
-    if (input) setValue((v) => v + input);
+    if (input) {
+      setValue((v) => v + input);
+      setHistoryIndex(-1);
+    }
   });
+
+  const lines = value.length > 0 ? value.split("\n") : [""];
 
   return (
     <Box flexDirection="column">
@@ -99,12 +151,31 @@ export const ComposeBox: React.FC<Props> = ({
           </Text>
         </Box>
       )}
-      <Box borderStyle="round" paddingX={1}>
-        <Text color={disabled ? "gray" : "white"}>
-          {disabled ? "… " : "> "}
-          {value || (placeholder && !disabled ? <Text dimColor>{placeholder}</Text> : "")}
-          {!disabled && <Text color="cyan">▎</Text>}
-        </Text>
+      <Box borderStyle="round" paddingX={1} flexDirection="column">
+        {value.length === 0 && placeholder && !disabled && (
+          <Box>
+            <Text color="white">{"> "}</Text>
+            <Text dimColor>{placeholder}</Text>
+            <Text color="cyan">▎</Text>
+          </Box>
+        )}
+        {value.length > 0 &&
+          lines.map((line, i) => (
+            <Box key={i}>
+              <Text color={disabled ? "gray" : "white"}>
+                {i === 0 ? (disabled ? "… " : "> ") : "  "}
+                {line}
+              </Text>
+              {i === lines.length - 1 && !disabled && (
+                <Text color="cyan">▎</Text>
+              )}
+            </Box>
+          ))}
+        {value.length === 0 && disabled && (
+          <Box>
+            <Text color="gray">… </Text>
+          </Box>
+        )}
       </Box>
     </Box>
   );

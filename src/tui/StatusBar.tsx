@@ -1,6 +1,8 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import type { Participant } from "../wire/protocol.js";
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 interface Props {
   hostName: string;
@@ -10,8 +12,8 @@ interface Props {
   thinking: boolean;
   participants: Participant[];
   queueDepth: number;
+  totalCostUsd: number;
   joinUrl?: string;
-  lastCostUsd?: number;
 }
 
 export const StatusBar: React.FC<Props> = ({
@@ -22,11 +24,16 @@ export const StatusBar: React.FC<Props> = ({
   thinking,
   participants,
   queueDepth,
+  totalCostUsd,
   joinUrl,
-  lastCostUsd,
 }) => {
-  // Show everyone connected from the *viewer's* perspective — i.e. exclude
-  // self, and for guests include the host (who isn't in `participants`).
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!thinking) return;
+    const t = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(t);
+  }, [thinking]);
+
   const connectedNames: string[] = isHost
     ? participants.map((p) => p.name)
     : [
@@ -39,8 +46,8 @@ export const StatusBar: React.FC<Props> = ({
     connectedNames.length === 0
       ? "solo"
       : `${connectedNames.length} connected: ${connectedNames.join(", ")}`;
-  const status = thinking ? "thinking…" : "ready";
   const role = isHost ? "host" : "guest";
+
   return (
     <Box paddingX={1} flexDirection="column">
       <Box>
@@ -49,13 +56,15 @@ export const StatusBar: React.FC<Props> = ({
           • {myName} ({role}){" "}
         </Text>
         <Text dimColor>• {conn} </Text>
-        <Text dimColor>• {status} </Text>
+        <Text color={thinking ? "yellow" : undefined} dimColor={!thinking}>
+          • {thinking ? `${SPINNER_FRAMES[frame]} thinking` : "ready"}{" "}
+        </Text>
         {queueDepth > 0 && (
           <Text color="yellow">• queue: {queueDepth} </Text>
         )}
         <Text dimColor>• session {sessionId.slice(0, 8)}</Text>
-        {lastCostUsd !== undefined && (
-          <Text dimColor> • ${lastCostUsd.toFixed(4)}</Text>
+        {totalCostUsd > 0 && (
+          <Text dimColor> • ${totalCostUsd.toFixed(4)}</Text>
         )}
       </Box>
       {joinUrl && (

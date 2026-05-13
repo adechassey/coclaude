@@ -8,7 +8,7 @@ import type {
 } from "../session/SessionView.js";
 import type { CoEvent } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
-import { Conversation } from "./Conversation.js";
+import { Conversation, type ToolProgressMap } from "./Conversation.js";
 import { ComposeBox } from "./ComposeBox.js";
 import { StatusBar } from "./StatusBar.js";
 import { JoinApproval } from "./JoinApproval.js";
@@ -20,28 +20,40 @@ interface Props {
 }
 
 export const App: React.FC<Props> = ({ session, joinUrl }) => {
-  const [events, setEvents] = useState<CoEvent[]>(() => session.getEvents().slice());
+  const [events, setEvents] = useState<CoEvent[]>(() =>
+    session.getEvents().slice(),
+  );
   const [thinking, setThinking] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>(
     session.getParticipants(),
   );
-  const [lastCostUsd, setLastCostUsd] = useState<number | undefined>(undefined);
+  const [totalCostUsd, setTotalCostUsd] = useState<number>(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(
     session.getSlashCommands(),
   );
   const [queueDepth, setQueueDepth] = useState<number>(session.getQueueDepth());
+  const [streamingText, setStreamingText] = useState<string>(
+    session.getStreamingText(),
+  );
+  const [toolProgress, setToolProgress] = useState<ToolProgressMap>({});
   const [pendingJoins, setPendingJoins] = useState<JoinRequest[]>([]);
   const [pendingTools, setPendingTools] = useState<ToolApprovalRequest[]>([]);
+  const [submissionHistory, setSubmissionHistory] = useState<string[]>([]);
 
   useEffect(() => {
-    // Use onFuture for events because we seeded state from getEvents()
-    // already — replay would duplicate.
     const offEvents = session.onFuture((event) => {
       setEvents((prev) => [...prev, event]);
-      if (event.type === "user_prompt") setThinking(true);
+      if (event.type === "user_prompt") {
+        setThinking(true);
+        if (event.author === session.myName) {
+          setSubmissionHistory((h) =>
+            h[h.length - 1] === event.content ? h : [...h, event.content],
+          );
+        }
+      }
       if (event.type === "result") {
         setThinking(false);
-        setLastCostUsd(event.totalCostUsd);
+        setTotalCostUsd((prev) => prev + event.totalCostUsd);
       }
       if (event.type === "interrupted") {
         setThinking(false);
@@ -53,6 +65,13 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
     const offCommands = session.onSlashCommands(setSlashCommands);
     const offParticipants = session.onParticipants(setParticipants);
     const offQueue = session.onQueueChange(setQueueDepth);
+    const offStream = session.onStream(setStreamingText);
+    const offToolProgress = session.onToolProgress((p) => {
+      setToolProgress((prev) => ({
+        ...prev,
+        [p.toolUseId]: { toolName: p.toolName, elapsedSec: p.elapsedSec },
+      }));
+    });
     const offJoinReq = session.onJoinRequest((req) => {
       setPendingJoins((prev) => [...prev, req]);
     });
@@ -64,12 +83,13 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
       offCommands();
       offParticipants();
       offQueue();
+      offStream();
+      offToolProgress();
       offJoinReq();
       offToolReq();
     };
   }, [session]);
 
-  // Esc interrupts the in-flight turn (only meaningful while thinking).
   useInput((_input, key) => {
     if (key.escape && thinking) {
       session.interrupt();
@@ -79,7 +99,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
   const showAuthorPrefix = participants.length > 0;
   const currentJoin = pendingJoins[0];
   const currentTool = pendingTools[0];
-  const composeDisabled = thinking || !!currentJoin || !!currentTool;
+  const composeDisabled = !!currentJoin || !!currentTool;
 
   return (
     <Box flexDirection="column">
@@ -91,13 +111,15 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
         thinking={thinking}
         participants={participants}
         queueDepth={queueDepth}
+        totalCostUsd={totalCostUsd}
         {...(joinUrl ? { joinUrl } : {})}
-        {...(lastCostUsd !== undefined ? { lastCostUsd } : {})}
       />
       <Conversation
         events={events}
         showAuthorPrefix={showAuthorPrefix}
         myName={session.myName}
+        streamingText={streamingText}
+        toolProgress={toolProgress}
       />
       {currentJoin && (
         <JoinApproval
@@ -124,10 +146,11 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
         disabled={composeDisabled}
         placeholder={
           thinking
-            ? "esc to interrupt"
-            : "type a message and press enter — / for commands"
+            ? "esc to interrupt — type to queue next prompt"
+            : "type a message and press enter — / for commands · ctrl+j newline · ↑↓ history"
         }
         slashCommands={slashCommands}
+        history={submissionHistory}
       />
     </Box>
   );
