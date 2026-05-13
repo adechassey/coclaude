@@ -150,6 +150,7 @@ function handleConnection(
         deny(`name '${requested}' is already taken`);
         return;
       }
+      const since = msg.since;
 
       const req: JoinRequest = {
         id: connId,
@@ -161,12 +162,20 @@ function handleConnection(
             approved = true;
             joinerName = requested;
             session.addParticipant(joinerName);
+            // Honor hello.since for reconnect — skip events the client
+            // already has. Out-of-ring requests just get whatever's still
+            // in memory (best effort).
+            const allEvents = session.getEvents();
+            const sinceEvents =
+              since !== undefined
+                ? allEvents.filter((e) => e.seq > since)
+                : allEvents;
             send({
               type: "welcome",
               sessionId: session.sessionId,
               hostName: session.hostName,
               yourName: joinerName,
-              events: session.getEvents(),
+              events: sinceEvents,
               slashCommands: session.getSlashCommands(),
               participants: session.getParticipants(),
             });
@@ -209,6 +218,12 @@ function handleConnection(
       const content = msg.content.trim();
       if (content && joinerName) {
         session.submitPrompt(content, joinerName);
+      }
+      return;
+    }
+    if (msg.type === "interrupt") {
+      if (joinerName) {
+        session.interrupt(joinerName, msg.reason);
       }
       return;
     }
