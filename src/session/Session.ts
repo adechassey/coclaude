@@ -7,6 +7,8 @@ import {
 import { randomUUID } from "node:crypto";
 import { EventLog } from "../log/EventLog.js";
 import type { CoEvent, CoEventInput } from "../types.js";
+import type { Participant } from "../wire/protocol.js";
+import type { JoinRequest, SessionView } from "./SessionView.js";
 
 export interface SessionOptions {
   hostName: string;
@@ -15,19 +17,31 @@ export interface SessionOptions {
 
 export type EventListener = (event: CoEvent) => void;
 
-export class Session {
+export class Session implements SessionView {
   readonly sessionId: string;
   readonly hostName: string;
+  readonly isHost = true;
+  get myName(): string {
+    return this.hostName;
+  }
+
   private readonly resumeSessionId: string | undefined;
   private readonly eventLog: EventLog;
+
+  private events: CoEvent[] = [];
   private listeners = new Set<EventListener>();
-  private slashCommandsListeners = new Set<(commands: SlashCommand[]) => void>();
+
   private slashCommands: SlashCommand[] = [];
+  private slashCommandsListeners = new Set<(commands: SlashCommand[]) => void>();
+
+  private participants: Participant[] = [];
+  private participantsListeners = new Set<(p: Participant[]) => void>();
+
+  private joinRequestListeners = new Set<(req: JoinRequest) => void>();
 
   private userQueue: SDKUserMessage[] = [];
   private waiter: ((msg: SDKUserMessage | null) => void) | null = null;
   private closed = false;
-
   private abortController = new AbortController();
 
   constructor(opts: SessionOptions) {
@@ -40,7 +54,18 @@ export class Session {
     );
   }
 
+  // SessionView ----------------------------------------------------------
+
   on(listener: EventListener): () => void {
+    // Replay past events synchronously so late subscribers don't miss anything.
+    for (const e of this.events) listener(e);
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  onFuture(listener: EventListener): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -55,19 +80,55 @@ export class Session {
     };
   }
 
+  onParticipants(listener: (p: Participant[]) => void): () => void {
+    this.participantsListeners.add(listener);
+    listener(this.participants);
+    return () => {
+      this.participantsListeners.delete(listener);
+    };
+  }
+
+  onJoinRequest(listener: (req: JoinRequest) => void): () => void {
+    this.joinRequestListeners.add(listener);
+    return () => {
+      this.joinRequestListeners.delete(listener);
+    };
+  }
+
+  getEvents(): CoEvent[] {
+    return this.events;
+  }
+
   getSlashCommands(): SlashCommand[] {
     return this.slashCommands;
   }
 
-  private setSlashCommands(commands: SlashCommand[]): void {
-    this.slashCommands = commands;
-    for (const l of this.slashCommandsListeners) l(commands);
+  getParticipants(): Participant[] {
+    return this.participants;
   }
 
-  private emit(event: CoEventInput): void {
-    const full = this.eventLog.append(event);
-    for (const l of this.listeners) l(full);
+  // Host-only API used by the WS gateway --------------------------------
+
+  /** Called by the WS gateway when a connection passes the token check. */
+  publishJoinRequest(req: JoinRequest): void {
+    for (const l of this.joinRequestListeners) l(req);
   }
+
+  addParticipant(name: string): void {
+    if (this.participants.some((p) => p.name === name)) return;
+    this.participants = [...this.participants, { name, connectedAt: Date.now() }];
+    for (const l of this.participantsListeners) l(this.participants);
+  }
+
+  removeParticipant(name: string): void {
+    const before = this.participants.length;
+    this.participants = this.participants.filter((p) => p.name !== name);
+    if (this.participants.length !== before) {
+      for (const l of this.participantsListeners) l(this.participants);
+    }
+  }
+
+  // Prompt submission ---------------------------------------------------
 
   submitPrompt(content: string, author: string = this.hostName): void {
     if (this.closed) return;
@@ -89,6 +150,8 @@ export class Session {
       this.userQueue.push(userMessage);
     }
   }
+
+  // SDK loop ------------------------------------------------------------
 
   private async *userStream(): AsyncIterable<SDKUserMessage> {
     while (!this.closed) {
@@ -114,8 +177,6 @@ export class Session {
       },
     });
 
-    // Eagerly fetch the structured command list (name + description + argument
-    // hints). Resolves once the SDK has initialized; we dispatch to listeners.
     q.supportedCommands()
       .then((commands) => {
         this.setSlashCommands(commands);
@@ -164,7 +225,6 @@ export class Session {
       return;
     }
     if (msg.type === "user") {
-      // Tool results come back as user messages with tool_result content blocks.
       const m = (msg as unknown as { message: { content: unknown } }).message;
       for (const tr of extractToolResults(m.content)) {
         this.emit({
@@ -192,15 +252,23 @@ export class Session {
       });
       return;
     }
-    // Everything else (init, partial, progress, hooks, status, etc.) is opaque
-    // for v1 — log it so it shows up in ~/.coclaude/sessions/<id>.jsonl for
-    // debugging, but don't surface in the conversation pane.
     const sys = msg as { type: string; subtype?: string };
     this.emit({
       type: "system",
       subtype: sys.subtype ?? msg.type,
       payload: msg,
     });
+  }
+
+  private emit(event: CoEventInput): void {
+    const full = this.eventLog.append(event);
+    this.events.push(full);
+    for (const l of this.listeners) l(full);
+  }
+
+  private setSlashCommands(commands: SlashCommand[]): void {
+    this.slashCommands = commands;
+    for (const l of this.slashCommandsListeners) l(commands);
   }
 
   async stop(): Promise<void> {
