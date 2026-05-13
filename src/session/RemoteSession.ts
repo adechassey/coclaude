@@ -124,6 +124,23 @@ export class RemoteSession implements SessionView {
     this.send({ type: "submit", content });
   }
 
+  interrupt(reason?: string): void {
+    if (!this.welcomed) return;
+    this.send(reason !== undefined ? { type: "interrupt", reason } : { type: "interrupt" });
+  }
+
+  getQueueDepth(): number {
+    // We don't currently mirror the host's queue state over the wire.
+    return 0;
+  }
+
+  onQueueChange(listener: (depth: number) => void): () => void {
+    listener(0);
+    return () => {
+      // queue depth changes are host-only for now
+    };
+  }
+
   close(): void {
     try {
       this.ws.close();

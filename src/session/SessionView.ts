@@ -45,6 +45,12 @@ export interface SessionView {
   onToolApproval(listener: (req: ToolApprovalRequest) => void): () => void;
 
   submitPrompt(content: string): void;
+  interrupt(reason?: string): void;
+  /** Number of submissions waiting behind the in-flight turn (host) or
+   * a best-effort estimate (joiner — currently always 0 since we don't
+   * mirror queue state over the wire). */
+  getQueueDepth(): number;
+  onQueueChange(listener: (depth: number) => void): () => void;
 
   getEvents(): CoEvent[];
   getSlashCommands(): SlashCommand[];

@@ -59,6 +59,11 @@ export class Session implements SessionView {
   private participants: Participant[] = [];
   private participantsListeners = new Set<(p: Participant[]) => void>();
 
+  private queueListeners = new Set<(depth: number) => void>();
+
+  // Ring buffer cap. Older events live on disk only.
+  private static readonly RING_BUFFER_SIZE = 500;
+
   private scopes = new Map<string, Scope>();
 
   private joinRequestListeners = new Set<(req: JoinRequest) => void>();
@@ -71,15 +76,41 @@ export class Session implements SessionView {
   private currentAuthor: string;
   private abortController = new AbortController();
 
+  // Interrupt state. interrupt() sets these and aborts the current
+  // controller. Session.run()'s loop sees the flag and emits the marker
+  // before starting the next query with `resume`.
+  private interruptRequested = false;
+  private interruptBy: string | null = null;
+  private interruptReason: string | undefined;
+
+  // Coclaude's sessionId is passed to the SDK as `sessionId` on the first
+  // query and as `resume` on subsequent (post-interrupt) queries. Tracking
+  // this flag avoids the SDK error of passing both.
+  private firstQuery = true;
+  private commandsFetched = false;
+
   constructor(opts: SessionOptions) {
     this.hostName = opts.hostName;
     this.currentAuthor = opts.hostName;
     this.resumeSessionId = opts.resumeSessionId;
     this.sessionId = opts.resumeSessionId ?? randomUUID();
-    this.eventLog = new EventLog(
-      this.sessionId,
-      EventLog.defaultPath(this.sessionId),
-    );
+    const logPath = EventLog.defaultPath(this.sessionId);
+
+    let initialNextSeq = 0;
+    if (opts.resumeSessionId) {
+      const past = EventLog.readSync(logPath);
+      // Keep only the last RING_BUFFER_SIZE in memory; older events are
+      // recoverable from disk but won't be replayed to subscribers.
+      this.events =
+        past.length > Session.RING_BUFFER_SIZE
+          ? past.slice(-Session.RING_BUFFER_SIZE)
+          : past;
+      if (past.length > 0) {
+        initialNextSeq = past[past.length - 1]!.seq + 1;
+      }
+    }
+
+    this.eventLog = new EventLog(this.sessionId, logPath, initialNextSeq);
   }
 
   // SessionView ----------------------------------------------------------
@@ -113,6 +144,18 @@ export class Session implements SessionView {
     return () => {
       this.participantsListeners.delete(listener);
     };
+  }
+
+  onQueueChange(listener: (depth: number) => void): () => void {
+    this.queueListeners.add(listener);
+    listener(this.userQueue.length);
+    return () => {
+      this.queueListeners.delete(listener);
+    };
+  }
+
+  private notifyQueue(): void {
+    for (const l of this.queueListeners) l(this.userQueue.length);
   }
 
   onJoinRequest(listener: (req: JoinRequest) => void): () => void {
@@ -211,6 +254,7 @@ export class Session implements SessionView {
       w(entry);
     } else {
       this.userQueue.push(entry);
+      this.notifyQueue();
     }
   }
 
@@ -368,6 +412,7 @@ export class Session implements SessionView {
       let entry: QueuedPrompt | null;
       if (this.userQueue.length > 0) {
         entry = this.userQueue.shift()!;
+        this.notifyQueue();
       } else {
         entry = await new Promise<QueuedPrompt | null>((resolve) => {
           this.waiter = resolve;
@@ -383,41 +428,89 @@ export class Session implements SessionView {
     const canUseTool: CanUseTool = (toolName, input, options) =>
       this.canUseTool(toolName, input, options);
 
-    const q = query({
-      prompt: this.userStream(),
-      options: {
-        abortController: this.abortController,
-        canUseTool,
-        ...(this.resumeSessionId ? { resume: this.resumeSessionId } : {}),
-      },
-    });
+    // Loop so interrupt-and-resume keeps the conversation going across
+    // multiple SDK queries within one coclaude session.
+    while (!this.closed) {
+      this.abortController = new AbortController();
 
-    q.supportedCommands()
-      .then((commands) => {
-        this.setSlashCommands(commands);
-      })
-      .catch((err: unknown) => {
-        this.emit({
-          type: "system",
-          subtype: "supported_commands_error",
-          payload: { message: (err as Error)?.message ?? String(err) },
-        });
+      // First query uses sessionId to claim our UUID; subsequent queries
+      // resume it (post-interrupt). If the user passed --resume, treat it
+      // the same as a post-interrupt resume.
+      const useResume = !this.firstQuery || !!this.resumeSessionId;
+      const q = query({
+        prompt: this.userStream(),
+        options: {
+          abortController: this.abortController,
+          canUseTool,
+          ...(useResume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
+        },
       });
+      this.firstQuery = false;
 
-    try {
-      for await (const message of q) {
-        this.handleSdkMessage(message);
+      if (!this.commandsFetched) {
+        this.commandsFetched = true;
+        q.supportedCommands()
+          .then((commands) => {
+            this.setSlashCommands(commands);
+          })
+          .catch((err: unknown) => {
+            this.emit({
+              type: "system",
+              subtype: "supported_commands_error",
+              payload: { message: (err as Error)?.message ?? String(err) },
+            });
+          });
       }
-    } catch (err: unknown) {
-      if (this.closed) return;
-      const e = err as { name?: string; message?: string };
-      this.emit({
-        type: "system",
-        subtype: "error",
-        payload: { message: e?.message ?? String(err) },
-      });
-      throw err;
+
+      let wasInterrupted = false;
+      try {
+        for await (const message of q) {
+          this.handleSdkMessage(message);
+        }
+      } catch (err: unknown) {
+        if (this.closed) return;
+        if (this.interruptRequested) {
+          wasInterrupted = true;
+        } else {
+          const e = err as { name?: string; message?: string };
+          this.emit({
+            type: "system",
+            subtype: "error",
+            payload: { message: e?.message ?? String(err) },
+          });
+          throw err;
+        }
+      }
+
+      if (wasInterrupted) {
+        this.emit({
+          type: "interrupted",
+          by: this.interruptBy ?? "?",
+          ...(this.interruptReason !== undefined
+            ? { reason: this.interruptReason }
+            : {}),
+        });
+        this.interruptRequested = false;
+        this.interruptBy = null;
+        this.interruptReason = undefined;
+        continue;
+      }
+
+      // Normal completion — userStream returned because we're closing.
+      break;
     }
+  }
+
+  interrupt(by: string = this.hostName, reason?: string): void {
+    if (this.closed) return;
+    this.interruptRequested = true;
+    this.interruptBy = by;
+    this.interruptReason = reason;
+    this.abortController.abort();
+  }
+
+  getQueueDepth(): number {
+    return this.userQueue.length;
   }
 
   private async canUseTool(
@@ -557,6 +650,9 @@ export class Session implements SessionView {
     if (this.closed) return;
     const full = this.eventLog.append(event);
     this.events.push(full);
+    if (this.events.length > Session.RING_BUFFER_SIZE) {
+      this.events.splice(0, this.events.length - Session.RING_BUFFER_SIZE);
+    }
     for (const l of this.listeners) l(full);
   }
 
