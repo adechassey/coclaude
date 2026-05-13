@@ -5,13 +5,15 @@ import type { CoEvent, CoEventInput } from "../types.js";
 
 export class EventLog {
   private stream: fs.WriteStream;
-  private nextSeq = 0;
+  private nextSeq: number;
   private closed = false;
 
   constructor(
     public readonly sessionId: string,
     public readonly logPath: string,
+    initialNextSeq = 0,
   ) {
+    this.nextSeq = initialNextSeq;
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     this.stream = fs.createWriteStream(logPath, { flags: "a" });
     // Don't crash the process if the stream errors during shutdown; emit()
@@ -21,6 +23,27 @@ export class EventLog {
 
   static defaultPath(sessionId: string): string {
     return path.join(os.homedir(), ".coclaude", "sessions", `${sessionId}.jsonl`);
+  }
+
+  /** Read all events from a JSONL session log on disk. Returns [] if the
+   * file doesn't exist or can't be parsed. Used for --resume. */
+  static readSync(logPath: string): CoEvent[] {
+    let content: string;
+    try {
+      content = fs.readFileSync(logPath, "utf8");
+    } catch {
+      return [];
+    }
+    const out: CoEvent[] = [];
+    for (const line of content.split("\n")) {
+      if (!line) continue;
+      try {
+        out.push(JSON.parse(line) as CoEvent);
+      } catch {
+        // skip malformed line
+      }
+    }
+    return out;
   }
 
   append(event: CoEventInput): CoEvent {
