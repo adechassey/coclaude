@@ -2,13 +2,18 @@
 import { Command } from "commander";
 import { startHost } from "./host.js";
 import { startJoin } from "./join.js";
+import { runSelfUpdate } from "./selfUpdate.js";
+
+// Bun's `--define` flag in CI replaces this with the tag at build time. When
+// running from source it stays "0.0.1-dev".
+const VERSION = process.env["COCLAUDE_VERSION"] ?? "0.0.1-dev";
 
 const program = new Command();
 
 program
   .name("coclaude")
   .description("Multiplayer Claude Code")
-  .version("0.0.1");
+  .version(VERSION);
 
 program
   .command("host")
@@ -45,6 +50,13 @@ program
   .option("--name <name>", "Your display name")
   .action(async (url: string, opts: { name?: string }) => {
     await startJoin({ url, ...(opts.name ? { name: opts.name } : {}) });
+  });
+
+program
+  .command("self-update")
+  .description("Download the latest coclaude binary from GitHub Releases")
+  .action(async () => {
+    await runSelfUpdate(VERSION);
   });
 
 program.parseAsync().catch((err) => {
