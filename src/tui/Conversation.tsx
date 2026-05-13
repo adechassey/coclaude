@@ -74,6 +74,15 @@ const EventLine: React.FC<{
           </Text>
         </Box>
       );
+    case "interrupted":
+      return (
+        <Box>
+          <Text color="yellow">
+            ⏸ interrupted by {event.by}
+            {event.reason ? `: ${event.reason}` : ""}
+          </Text>
+        </Box>
+      );
     case "system":
       return renderSystem(event);
   }

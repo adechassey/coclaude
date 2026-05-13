@@ -9,6 +9,7 @@ interface Props {
   sessionId: string;
   thinking: boolean;
   participants: Participant[];
+  queueDepth: number;
   joinUrl?: string;
   lastCostUsd?: number;
 }
@@ -20,6 +21,7 @@ export const StatusBar: React.FC<Props> = ({
   sessionId,
   thinking,
   participants,
+  queueDepth,
   joinUrl,
   lastCostUsd,
 }) => {
@@ -48,6 +50,9 @@ export const StatusBar: React.FC<Props> = ({
         </Text>
         <Text dimColor>• {conn} </Text>
         <Text dimColor>• {status} </Text>
+        {queueDepth > 0 && (
+          <Text color="yellow">• queue: {queueDepth} </Text>
+        )}
         <Text dimColor>• session {sessionId.slice(0, 8)}</Text>
         {lastCostUsd !== undefined && (
           <Text dimColor> • ${lastCostUsd.toFixed(4)}</Text>

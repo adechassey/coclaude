@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box } from "ink";
+import { Box, useInput } from "ink";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
   SessionView,
@@ -20,7 +20,7 @@ interface Props {
 }
 
 export const App: React.FC<Props> = ({ session, joinUrl }) => {
-  const [events, setEvents] = useState<CoEvent[]>([]);
+  const [events, setEvents] = useState<CoEvent[]>(() => session.getEvents().slice());
   const [thinking, setThinking] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>(
     session.getParticipants(),
@@ -29,16 +29,22 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(
     session.getSlashCommands(),
   );
+  const [queueDepth, setQueueDepth] = useState<number>(session.getQueueDepth());
   const [pendingJoins, setPendingJoins] = useState<JoinRequest[]>([]);
   const [pendingTools, setPendingTools] = useState<ToolApprovalRequest[]>([]);
 
   useEffect(() => {
-    const offEvents = session.on((event) => {
+    // Use onFuture for events because we seeded state from getEvents()
+    // already — replay would duplicate.
+    const offEvents = session.onFuture((event) => {
       setEvents((prev) => [...prev, event]);
       if (event.type === "user_prompt") setThinking(true);
       if (event.type === "result") {
         setThinking(false);
         setLastCostUsd(event.totalCostUsd);
+      }
+      if (event.type === "interrupted") {
+        setThinking(false);
       }
       if (event.type === "system" && event.subtype === "error") {
         setThinking(false);
@@ -46,6 +52,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
     });
     const offCommands = session.onSlashCommands(setSlashCommands);
     const offParticipants = session.onParticipants(setParticipants);
+    const offQueue = session.onQueueChange(setQueueDepth);
     const offJoinReq = session.onJoinRequest((req) => {
       setPendingJoins((prev) => [...prev, req]);
     });
@@ -56,12 +63,19 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
       offEvents();
       offCommands();
       offParticipants();
+      offQueue();
       offJoinReq();
       offToolReq();
     };
   }, [session]);
 
-  // Author prefix on history items appears the moment a second participant arrives.
+  // Esc interrupts the in-flight turn (only meaningful while thinking).
+  useInput((_input, key) => {
+    if (key.escape && thinking) {
+      session.interrupt();
+    }
+  });
+
   const showAuthorPrefix = participants.length > 0;
   const currentJoin = pendingJoins[0];
   const currentTool = pendingTools[0];
@@ -76,6 +90,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
         sessionId={session.sessionId}
         thinking={thinking}
         participants={participants}
+        queueDepth={queueDepth}
         {...(joinUrl ? { joinUrl } : {})}
         {...(lastCostUsd !== undefined ? { lastCostUsd } : {})}
       />
@@ -107,7 +122,11 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
       <ComposeBox
         onSubmit={(content) => session.submitPrompt(content)}
         disabled={composeDisabled}
-        placeholder="type a message and press enter — / for commands"
+        placeholder={
+          thinking
+            ? "esc to interrupt"
+            : "type a message and press enter — / for commands"
+        }
         slashCommands={slashCommands}
       />
     </Box>
