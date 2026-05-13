@@ -7,29 +7,15 @@ allowed-tools: Bash(git *) Bash(gh *) Bash(jq *) Bash(cat *) Bash(grep *) Bash(l
 ## Current state
 
 ```!
-echo "=== branch ==="
-git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(not a git repo)"
-echo
-echo "=== clean? ==="
-git status --short
-echo
-echo "=== ahead/behind remote? ==="
-git rev-list --left-right --count "@{u}...HEAD" 2>/dev/null | awk '{ printf "behind: %s   ahead: %s\n", $1, $2 }' || echo "(no upstream)"
-echo
-echo "=== last tags ==="
-git tag --sort=-version:refname | head -5 || echo "(no tags yet)"
-echo
-echo "=== remote ==="
-git remote get-url origin 2>/dev/null || echo "(no origin remote)"
-echo
-echo "=== release workflow files ==="
-ls .github/workflows/ 2>/dev/null | grep -iE 'release|publish' || echo "(no release workflow detected)"
-echo
-echo "=== version-bearing files ==="
-for f in package.json src/version.ts src/version.js version.ts version.js lib/version.ts lib/version.js Cargo.toml pyproject.toml; do
-  [ -f "$f" ] && echo "  $f"
-done
-grep -lE '__version__\s*=' --include='*.py' -r . 2>/dev/null | head -3
+echo "=== branch ===" && git rev-parse --abbrev-ref HEAD 2>/dev/null
+echo "=== clean? ===" && git status --short
+echo "=== upstream sync ===" && git status -sb | head -1
+echo "=== last tags ===" && git tag --sort=-version:refname | head -5
+echo "=== remote ===" && git remote get-url origin 2>/dev/null
+echo "=== release workflows ===" && ls .github/workflows/ 2>/dev/null
+echo "=== node version files ===" && ls package.json src/version.ts version.ts lib/version.ts 2>/dev/null
+echo "=== rust version files ===" && ls Cargo.toml 2>/dev/null
+echo "=== python version files ===" && ls pyproject.toml 2>/dev/null
 ```
 
 ## What you're doing
