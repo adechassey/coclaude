@@ -40,6 +40,16 @@ export type ServerMessage =
   | { type: "event"; event: CoEvent }
   | { type: "commands"; slashCommands: SlashCommand[] }
   | { type: "participants"; participants: Participant[] }
+  // Transient (not persisted to disk): assistant streaming text. The joiner
+  // resets its buffer when reset=true, otherwise appends delta.
+  | { type: "stream"; delta?: string; reset?: boolean }
+  // Transient: tool call progress tick.
+  | {
+      type: "tool_progress";
+      toolUseId: string;
+      toolName: string;
+      elapsedSec: number;
+    }
   | { type: "pong" };
 
 export function encode(msg: ClientMessage | ServerMessage): string {

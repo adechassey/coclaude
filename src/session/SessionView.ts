@@ -51,6 +51,14 @@ export interface SessionView {
    * mirror queue state over the wire). */
   getQueueDepth(): number;
   onQueueChange(listener: (depth: number) => void): () => void;
+  /** Transient: in-progress assistant text. Callback receives the current
+   * accumulated text (empty string means cleared). Not persisted. */
+  onStream(listener: (text: string) => void): () => void;
+  /** Transient: tool execution progress. */
+  onToolProgress(
+    listener: (p: { toolUseId: string; toolName: string; elapsedSec: number }) => void,
+  ): () => void;
+  getStreamingText(): string;
 
   getEvents(): CoEvent[];
   getSlashCommands(): SlashCommand[];
