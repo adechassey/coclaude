@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
 
       - uses: oven-sh/setup-bun@v2
 
@@ -70,3 +71,12 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      # Publish to npm. Requires a repository secret NPM_TOKEN with an
+      # "Automation" type access token (no 2FA on publish). Skipped for
+      # pre-release tags (anything containing a `-` like v0.1.0-rc1).
+      - name: Publish to npm
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --no-git-checks

@@ -31,7 +31,7 @@ Today, AI-assisted coding is single-player. Two devs working with Claude togethe
 
 ## Status
 
-Early alpha. Solo + 2-3 person collaboration works. No published binary yet — run from source for now. See [PLAN.md](./PLAN.md) for the design and the milestone status.
+Early alpha. Solo + 2–3 person collaboration works. See [PLAN.md](./PLAN.md) for the design and the milestone status.
 
 What's working today:
 
@@ -45,38 +45,38 @@ What's working today:
 
 Not yet:
 
-- Published binary / install script (build & run from source)
-- Self-update flow
 - Auto-reconnect on dropped joiner connection
 - Web/native clients (wire protocol is ready; no client built yet)
 
+## Requirements
+
+- **Node.js 22+** (for the npm install path).
+- **The `claude` CLI** must be installed and on your PATH. coclaude orchestrates a Claude Code session and reuses your existing Claude Code auth / settings / agents / hooks. Install via the [Claude Code docs](https://docs.claude.com/en/docs/claude-code/setup) if you haven't already.
+
 ## Install
 
-Once binaries are published, the install script will set you up:
+Primary (npm):
+
+```bash
+npm install -g coclaude    # or: pnpm i -g coclaude
+```
+
+Secondary (single binary via curl):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adechassey/coclaude/main/install.sh | bash
 ```
 
-To install from source (current default until v0.1.0 is tagged):
+The binary path is heavier (~70MB; bundles the Bun runtime) but doesn't require Node. **Both paths still need `claude` on PATH** — see Requirements.
+
+From source:
 
 ```bash
 git clone git@github.com:adechassey/coclaude.git
 cd coclaude
 pnpm install
-pnpm build         # produces ./dist/cli.js
-```
-
-Then either invoke directly:
-
-```bash
-./dist/cli.js host
-```
-
-Or via the dev runner:
-
-```bash
-pnpm dev host
+pnpm dev host           # run via tsx
+# or: pnpm build && ./dist/cli.js host
 ```
 
 ## Usage

@@ -2,16 +2,43 @@
   "name": "coclaude",
   "version": "0.1.0",
   "type": "module",
-  "description": "Multiplayer Claude Code",
+  "description": "Multiplayer Claude Code — pair-program with teammates inside the same Claude Code session",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "multiplayer",
+    "pair-programming",
+    "ai",
+    "agent",
+    "tui",
+    "collaboration"
+  ],
+  "homepage": "https://github.com/adechassey/coclaude#readme",
+  "bugs": {
+    "url": "https://github.com/adechassey/coclaude/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adechassey/coclaude.git"
+  },
+  "license": "MIT",
+  "author": "adechassey <12235204+adechassey@users.noreply.github.com>",
   "bin": {
     "coclaude": "./dist/cli.js"
   },
   "main": "./dist/cli.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "PLAN.md"
+  ],
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc -p . && chmod +x dist/cli.js",
     "start": "node dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "engines": {
     "node": ">=22"
@@ -31,5 +58,8 @@
     "react-devtools-core": "^7.0.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
