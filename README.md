@@ -47,26 +47,7 @@ coclaude host --tunnel   # spawns cloudflared; prints a wss://*.trycloudflare.co
 
 ### What it looks like
 
-```
-┌─ alice's terminal ───────────────────────────────────────────────────────────┐
-│ coclaude • alice (host) • 1 connected: bob • ⠹ thinking • session 8a2f9c …  │
-│ join: ws://127.0.0.1:7777/s/CXO_XBYeclUe…                                    │
-│                                                                              │
-│ [alice] refactor the auth module to remove duplicate validation              │
-│ claude I'll look at the auth module and find the duplication.                │
-│ ↪ Read({"path":"src/auth.ts"})                                               │
-│ ↪ Grep — running 2s…                                                         │
-│ ⏸ interrupted by bob: don't change the OAuth flow                            │
-│ [bob] just clean up the helper, keep OAuth intact                            │
-│ claude ▎                                                                     │
-│ ╭──────────────────────────────────────────────────────────────────────────╮ │
-│ │ … esc to interrupt — type to queue next prompt                           │ │
-│ ╰──────────────────────────────────────────────────────────────────────────╯ │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-<!-- TODO: replace the ASCII mockup with an asciinema demo once recorded:
-     [![asciicast](https://asciinema.org/a/XXXXXX.svg)](https://asciinema.org/a/XXXXXX) -->
+![coclaude demo — alice hosts, bob joins, both exchange prompts in a shared session](https://github.com/user-attachments/assets/3ada0697-0f18-4939-acb4-0c0f50e05980)
 
 ## How it works (at a glance)
 
