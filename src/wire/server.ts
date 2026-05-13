@@ -204,6 +204,34 @@ function handleConnection(
                 }
               }),
             );
+            // Streaming text — send the current value to seed the joiner,
+            // then push deltas. The reset flag handles message_start clears.
+            let lastStream = session.getStreamingText();
+            if (lastStream) {
+              send({ type: "stream", delta: lastStream, reset: true });
+            }
+            cleanups.push(
+              session.onStream((text) => {
+                if (text === lastStream) return;
+                if (text === "" || !text.startsWith(lastStream)) {
+                  // Either cleared or replaced entirely — resync.
+                  send({ type: "stream", delta: text, reset: true });
+                } else {
+                  send({ type: "stream", delta: text.slice(lastStream.length) });
+                }
+                lastStream = text;
+              }),
+            );
+            cleanups.push(
+              session.onToolProgress((p) =>
+                send({
+                  type: "tool_progress",
+                  toolUseId: p.toolUseId,
+                  toolName: p.toolName,
+                  elapsedSec: p.elapsedSec,
+                }),
+              ),
+            );
           } else {
             deny(reason ?? "join denied by host");
           }
