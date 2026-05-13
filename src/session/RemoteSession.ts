@@ -9,7 +9,11 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from "../wire/protocol.js";
-import type { JoinRequest, SessionView } from "./SessionView.js";
+import type {
+  JoinRequest,
+  SessionView,
+  ToolApprovalRequest,
+} from "./SessionView.js";
 
 export interface RemoteSessionOptions {
   url: string;
@@ -96,6 +100,12 @@ export class RemoteSession implements SessionView {
   onJoinRequest(_listener: (req: JoinRequest) => void): () => void {
     return () => {
       // join requests are host-only
+    };
+  }
+
+  onToolApproval(_listener: (req: ToolApprovalRequest) => void): () => void {
+    return () => {
+      // tool approvals are host-only
     };
   }
 

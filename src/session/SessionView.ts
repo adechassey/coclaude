@@ -1,12 +1,28 @@
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type { CoEvent } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
+import type { Scope } from "../policy/scopes.js";
 
 export interface JoinRequest {
   id: string;
   name: string;
   remoteAddress: string;
   resolve(decision: "approve" | "deny", reason?: string): void;
+}
+
+export interface ToolApprovalRequest {
+  id: string;
+  author: string;
+  toolName: string;
+  input: unknown;
+  currentScope: Scope;
+  resolve(decision: ToolApprovalDecision): void;
+}
+
+export interface ToolApprovalDecision {
+  decision: "approve" | "deny";
+  reason?: string;
+  promoteScope?: Scope;
 }
 
 // Everything App needs to render a session, whether the underlying state lives
@@ -26,6 +42,7 @@ export interface SessionView {
   onParticipants(listener: (participants: Participant[]) => void): () => void;
   // Host-only. Joiner implementations return a no-op unsubscribe.
   onJoinRequest(listener: (req: JoinRequest) => void): () => void;
+  onToolApproval(listener: (req: ToolApprovalRequest) => void): () => void;
 
   submitPrompt(content: string): void;
 

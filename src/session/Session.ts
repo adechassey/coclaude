@@ -1,5 +1,7 @@
 import {
   query,
+  type CanUseTool,
+  type PermissionResult,
   type SDKMessage,
   type SDKUserMessage,
   type SlashCommand,
@@ -8,7 +10,22 @@ import { randomUUID } from "node:crypto";
 import { EventLog } from "../log/EventLog.js";
 import type { CoEvent, CoEventInput } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
-import type { JoinRequest, SessionView } from "./SessionView.js";
+import type {
+  JoinRequest,
+  SessionView,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+} from "./SessionView.js";
+import {
+  DEFAULT_SCOPE,
+  isInScope,
+  parseScope,
+  type Scope,
+} from "../policy/scopes.js";
+import {
+  COCLAUDE_COMMAND_NAMES,
+  COCLAUDE_COMMANDS,
+} from "../policy/slashCommands.js";
 
 export interface SessionOptions {
   hostName: string;
@@ -16,6 +33,11 @@ export interface SessionOptions {
 }
 
 export type EventListener = (event: CoEvent) => void;
+
+interface QueuedPrompt {
+  msg: SDKUserMessage;
+  author: string;
+}
 
 export class Session implements SessionView {
   readonly sessionId: string;
@@ -31,21 +53,27 @@ export class Session implements SessionView {
   private events: CoEvent[] = [];
   private listeners = new Set<EventListener>();
 
-  private slashCommands: SlashCommand[] = [];
+  private slashCommands: SlashCommand[] = COCLAUDE_COMMANDS;
   private slashCommandsListeners = new Set<(commands: SlashCommand[]) => void>();
 
   private participants: Participant[] = [];
   private participantsListeners = new Set<(p: Participant[]) => void>();
 
-  private joinRequestListeners = new Set<(req: JoinRequest) => void>();
+  private scopes = new Map<string, Scope>();
 
-  private userQueue: SDKUserMessage[] = [];
-  private waiter: ((msg: SDKUserMessage | null) => void) | null = null;
+  private joinRequestListeners = new Set<(req: JoinRequest) => void>();
+  private toolApprovalListeners = new Set<(req: ToolApprovalRequest) => void>();
+  private kickListeners = new Set<(name: string) => void>();
+
+  private userQueue: QueuedPrompt[] = [];
+  private waiter: ((entry: QueuedPrompt | null) => void) | null = null;
   private closed = false;
+  private currentAuthor: string;
   private abortController = new AbortController();
 
   constructor(opts: SessionOptions) {
     this.hostName = opts.hostName;
+    this.currentAuthor = opts.hostName;
     this.resumeSessionId = opts.resumeSessionId;
     this.sessionId = opts.resumeSessionId ?? randomUUID();
     this.eventLog = new EventLog(
@@ -57,7 +85,6 @@ export class Session implements SessionView {
   // SessionView ----------------------------------------------------------
 
   on(listener: EventListener): () => void {
-    // Replay past events synchronously so late subscribers don't miss anything.
     for (const e of this.events) listener(e);
     this.listeners.add(listener);
     return () => {
@@ -95,6 +122,13 @@ export class Session implements SessionView {
     };
   }
 
+  onToolApproval(listener: (req: ToolApprovalRequest) => void): () => void {
+    this.toolApprovalListeners.add(listener);
+    return () => {
+      this.toolApprovalListeners.delete(listener);
+    };
+  }
+
   getEvents(): CoEvent[] {
     return this.events;
   }
@@ -109,32 +143,60 @@ export class Session implements SessionView {
 
   // Host-only API used by the WS gateway --------------------------------
 
-  /** Called by the WS gateway when a connection passes the token check. */
   publishJoinRequest(req: JoinRequest): void {
     for (const l of this.joinRequestListeners) l(req);
   }
 
   addParticipant(name: string): void {
     if (this.participants.some((p) => p.name === name)) return;
-    this.participants = [...this.participants, { name, connectedAt: Date.now() }];
+    this.participants = [
+      ...this.participants,
+      { name, connectedAt: Date.now() },
+    ];
+    if (!this.scopes.has(name)) this.scopes.set(name, DEFAULT_SCOPE);
     for (const l of this.participantsListeners) l(this.participants);
   }
 
   removeParticipant(name: string): void {
     const before = this.participants.length;
     this.participants = this.participants.filter((p) => p.name !== name);
+    this.scopes.delete(name);
     if (this.participants.length !== before) {
       for (const l of this.participantsListeners) l(this.participants);
     }
+  }
+
+  getScope(name: string): Scope {
+    if (name === this.hostName) return "unrestricted";
+    return this.scopes.get(name) ?? DEFAULT_SCOPE;
+  }
+
+  onKick(listener: (name: string) => void): () => void {
+    this.kickListeners.add(listener);
+    return () => {
+      this.kickListeners.delete(listener);
+    };
   }
 
   // Prompt submission ---------------------------------------------------
 
   submitPrompt(content: string, author: string = this.hostName): void {
     if (this.closed) return;
-    this.emit({ type: "user_prompt", author, content });
+    const trimmed = content.trim();
+    if (!trimmed) return;
 
-    const tagged = `[${author}] ${content}`;
+    // Intercept coclaude commands before they reach the SDK.
+    if (trimmed.startsWith("/")) {
+      const head = trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+      if (COCLAUDE_COMMAND_NAMES.has(head)) {
+        this.handleCoclaudeCommand(trimmed, author);
+        return;
+      }
+    }
+
+    this.emit({ type: "user_prompt", author, content: trimmed });
+
+    const tagged = `[${author}] ${trimmed}`;
     const userMessage: SDKUserMessage = {
       type: "user",
       session_id: this.sessionId,
@@ -142,37 +204,190 @@ export class Session implements SessionView {
       parent_tool_use_id: null,
     } as SDKUserMessage;
 
+    const entry: QueuedPrompt = { msg: userMessage, author };
     if (this.waiter) {
       const w = this.waiter;
       this.waiter = null;
-      w(userMessage);
+      w(entry);
     } else {
-      this.userQueue.push(userMessage);
+      this.userQueue.push(entry);
     }
+  }
+
+  // Coclaude commands ---------------------------------------------------
+
+  private handleCoclaudeCommand(content: string, author: string): void {
+    const tokens = content.slice(1).split(/\s+/);
+    const cmd = tokens[0]?.toLowerCase() ?? "";
+    const args = tokens.slice(1);
+
+    // /who is readable for anyone; the rest are host-only.
+    if (cmd !== "who" && author !== this.hostName) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: { command: cmd, message: `/${cmd} is host-only`, author },
+      });
+      return;
+    }
+
+    switch (cmd) {
+      case "grant":
+        this.cmdGrant(args, author);
+        return;
+      case "revoke":
+        this.cmdRevoke(args, author);
+        return;
+      case "kick":
+        this.cmdKick(args, author);
+        return;
+      case "who":
+        this.cmdWho(author);
+        return;
+    }
+  }
+
+  private cmdGrant(args: string[], author: string): void {
+    const [name, scopeArg] = args;
+    if (!name || !scopeArg) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: { command: "grant", message: "usage: /grant <name> <scope>" },
+      });
+      return;
+    }
+    const scope = parseScope(scopeArg);
+    if (!scope) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: {
+          command: "grant",
+          message: `unknown scope '${scopeArg}' (use readonly|edits|bash|unrestricted)`,
+        },
+      });
+      return;
+    }
+    if (!this.participants.some((p) => p.name === name)) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: {
+          command: "grant",
+          message: `no participant named '${name}'`,
+        },
+      });
+      return;
+    }
+    this.scopes.set(name, scope);
+    this.emit({
+      type: "system",
+      subtype: "scope_changed",
+      payload: { name, scope, by: author },
+    });
+  }
+
+  private cmdRevoke(args: string[], author: string): void {
+    const [name] = args;
+    if (!name) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: { command: "revoke", message: "usage: /revoke <name>" },
+      });
+      return;
+    }
+    if (!this.participants.some((p) => p.name === name)) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: {
+          command: "revoke",
+          message: `no participant named '${name}'`,
+        },
+      });
+      return;
+    }
+    this.scopes.set(name, DEFAULT_SCOPE);
+    this.emit({
+      type: "system",
+      subtype: "scope_changed",
+      payload: { name, scope: DEFAULT_SCOPE, by: author },
+    });
+  }
+
+  private cmdKick(args: string[], author: string): void {
+    const [name] = args;
+    if (!name) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: { command: "kick", message: "usage: /kick <name>" },
+      });
+      return;
+    }
+    if (!this.participants.some((p) => p.name === name)) {
+      this.emit({
+        type: "system",
+        subtype: "command_error",
+        payload: {
+          command: "kick",
+          message: `no participant named '${name}'`,
+        },
+      });
+      return;
+    }
+    for (const l of this.kickListeners) l(name);
+    this.emit({
+      type: "system",
+      subtype: "kicked",
+      payload: { name, by: author },
+    });
+  }
+
+  private cmdWho(_author: string): void {
+    const rows = [
+      { name: this.hostName, scope: "host" as const },
+      ...this.participants.map((p) => ({
+        name: p.name,
+        scope: this.scopes.get(p.name) ?? DEFAULT_SCOPE,
+      })),
+    ];
+    this.emit({
+      type: "system",
+      subtype: "who",
+      payload: { rows },
+    });
   }
 
   // SDK loop ------------------------------------------------------------
 
   private async *userStream(): AsyncIterable<SDKUserMessage> {
     while (!this.closed) {
-      let msg: SDKUserMessage | null;
+      let entry: QueuedPrompt | null;
       if (this.userQueue.length > 0) {
-        msg = this.userQueue.shift()!;
+        entry = this.userQueue.shift()!;
       } else {
-        msg = await new Promise<SDKUserMessage | null>((resolve) => {
+        entry = await new Promise<QueuedPrompt | null>((resolve) => {
           this.waiter = resolve;
         });
       }
-      if (msg === null) return;
-      yield msg;
+      if (entry === null) return;
+      this.currentAuthor = entry.author;
+      yield entry.msg;
     }
   }
 
   async run(): Promise<void> {
+    const canUseTool: CanUseTool = (toolName, input, options) =>
+      this.canUseTool(toolName, input, options);
+
     const q = query({
       prompt: this.userStream(),
       options: {
         abortController: this.abortController,
+        canUseTool,
         ...(this.resumeSessionId ? { resume: this.resumeSessionId } : {}),
       },
     });
@@ -194,8 +409,6 @@ export class Session implements SessionView {
         this.handleSdkMessage(message);
       }
     } catch (err: unknown) {
-      // Any error during/after our own stop() is expected — the SDK throws
-      // out of the iterator when we abort. Swallow silently in that case.
       if (this.closed) return;
       const e = err as { name?: string; message?: string };
       this.emit({
@@ -205,6 +418,87 @@ export class Session implements SessionView {
       });
       throw err;
     }
+  }
+
+  private async canUseTool(
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { signal: AbortSignal; toolUseID: string },
+  ): Promise<PermissionResult> {
+    const author = this.currentAuthor;
+    if (author === this.hostName) {
+      // Host's own turns bypass — governed by their settings.json.
+      return { behavior: "allow", updatedInput: input };
+    }
+    const scope = this.getScope(author);
+    if (isInScope(toolName, scope)) {
+      this.emit({
+        type: "system",
+        subtype: "tool_auto_approved",
+        payload: { author, toolName, scope, toolUseId: options.toolUseID },
+      });
+      return { behavior: "allow", updatedInput: input };
+    }
+
+    const decision = await new Promise<ToolApprovalDecision>((resolve) => {
+      let settled = false;
+      const settle = (d: ToolApprovalDecision) => {
+        if (settled) return;
+        settled = true;
+        resolve(d);
+      };
+      const req: ToolApprovalRequest = {
+        id: randomUUID(),
+        author,
+        toolName,
+        input,
+        currentScope: scope,
+        resolve: settle,
+      };
+      for (const l of this.toolApprovalListeners) l(req);
+      // Auto-deny after 60s if the host doesn't decide.
+      const timer = setTimeout(
+        () => settle({ decision: "deny", reason: "approval timed out (60s)" }),
+        60_000,
+      );
+      options.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        settle({ decision: "deny", reason: "aborted" });
+      });
+    });
+
+    if (decision.promoteScope) {
+      this.scopes.set(author, decision.promoteScope);
+      this.emit({
+        type: "system",
+        subtype: "scope_changed",
+        payload: {
+          name: author,
+          scope: decision.promoteScope,
+          by: this.hostName,
+        },
+      });
+    }
+
+    this.emit({
+      type: "system",
+      subtype:
+        decision.decision === "approve" ? "tool_approved" : "tool_denied",
+      payload: {
+        author,
+        toolName,
+        toolUseId: options.toolUseID,
+        reason: decision.reason,
+      },
+    });
+
+    if (decision.decision === "approve") {
+      return { behavior: "allow", updatedInput: input };
+    }
+    return {
+      behavior: "deny",
+      message: decision.reason ?? "denied by host",
+    };
   }
 
   private handleSdkMessage(msg: SDKMessage): void {
@@ -218,7 +512,7 @@ export class Session implements SessionView {
           toolName: t.name,
           toolUseId: t.id,
           input: t.input,
-          author: this.hostName,
+          author: this.currentAuthor,
         });
       }
       return;
@@ -267,8 +561,9 @@ export class Session implements SessionView {
   }
 
   private setSlashCommands(commands: SlashCommand[]): void {
-    this.slashCommands = commands;
-    for (const l of this.slashCommandsListeners) l(commands);
+    // Coclaude's commands always appear first in the picker.
+    this.slashCommands = [...COCLAUDE_COMMANDS, ...commands];
+    for (const l of this.slashCommandsListeners) l(this.slashCommands);
   }
 
   async stop(): Promise<void> {
