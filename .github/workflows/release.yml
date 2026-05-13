@@ -51,6 +51,7 @@ jobs:
               --compile \
               --minify \
               --target="bun-${target}" \
+              --external react-devtools-core \
               ./src/cli.ts \
               --outfile "dist-bin/${name}"
           done
