@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+  # OIDC: pnpm publish uses this to obtain an ID token GH Actions signs,
+  # which npm verifies via its Trusted Publishers configuration. No
+  # long-lived NPM_TOKEN needed.
+  id-token: write
 
 jobs:
   build:
@@ -72,11 +76,10 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
-      # Publish to npm. Requires a repository secret NPM_TOKEN with an
-      # "Automation" type access token (no 2FA on publish). Skipped for
-      # pre-release tags (anything containing a `-` like v0.1.0-rc1).
+      # Publish to npm via OIDC (Trusted Publishers). Requires a one-time
+      # setup on npm: package settings → Trusted Publishers → Add GitHub
+      # Actions publisher with repo=adechassey/coclaude, workflow=release.yml.
+      # Skipped for pre-release tags (anything containing a `-` like v0.1.0-rc1).
       - name: Publish to npm
         if: ${{ !contains(github.ref_name, '-') }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --no-git-checks
+        run: pnpm publish --no-git-checks --access public
