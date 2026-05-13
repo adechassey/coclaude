@@ -22,6 +22,52 @@ Today, AI-assisted coding is single-player. Two devs working with Claude togethe
 
 `coclaude` treats multiplayer as the protocol-level concern it actually is, not as a sharing problem.
 
+## Quickstart
+
+Prerequisite: the `claude` CLI is installed and on your PATH ([Claude Code setup docs](https://docs.claude.com/en/docs/claude-code/setup)).
+
+```bash
+# 1. install coclaude
+npm install -g coclaude
+
+# 2. start a session — copy the join URL from the status bar
+coclaude host
+
+# 3. share the join URL; your teammate runs:
+coclaude join ws://... --name alice
+```
+
+The host's TUI shows a yellow approval prompt — press `a` to admit. From then on, both of you can submit prompts; Claude addresses you by name; tool calls outside the joiner's scope ping the host for approval. Press `Esc` to interrupt mid-response. `Ctrl+C` exits.
+
+For cross-network collaboration:
+
+```bash
+coclaude host --tunnel   # spawns cloudflared; prints a wss://*.trycloudflare.com URL
+```
+
+### What it looks like
+
+```
+┌─ alice's terminal ───────────────────────────────────────────────────────────┐
+│ coclaude • alice (host) • 1 connected: bob • ⠹ thinking • session 8a2f9c …  │
+│ join: ws://127.0.0.1:7777/s/CXO_XBYeclUe…                                    │
+│                                                                              │
+│ [alice] refactor the auth module to remove duplicate validation              │
+│ claude I'll look at the auth module and find the duplication.                │
+│ ↪ Read({"path":"src/auth.ts"})                                               │
+│ ↪ Grep — running 2s…                                                         │
+│ ⏸ interrupted by bob: don't change the OAuth flow                            │
+│ [bob] just clean up the helper, keep OAuth intact                            │
+│ claude ▎                                                                     │
+│ ╭──────────────────────────────────────────────────────────────────────────╮ │
+│ │ … esc to interrupt — type to queue next prompt                           │ │
+│ ╰──────────────────────────────────────────────────────────────────────────╯ │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+<!-- TODO: replace the ASCII mockup with an asciinema demo once recorded:
+     [![asciicast](https://asciinema.org/a/XXXXXX.svg)](https://asciinema.org/a/XXXXXX) -->
+
 ## How it works (at a glance)
 
 - **Each participant has a local compose pane.** Drafts are private. Only submitted prompts go on the wire.
