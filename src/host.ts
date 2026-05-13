@@ -5,12 +5,19 @@ import { App } from "./tui/App.js";
 import { resolveHostName } from "./identity.js";
 import { startServer } from "./wire/server.js";
 import { generateToken } from "./wire/token.js";
+import {
+  startCloudflaredTunnel,
+  tunnelJoinUrl,
+  TunnelStartError,
+  type Tunnel,
+} from "./wire/tunnel.js";
 
 export interface HostOptions {
   name?: string;
   resume?: string;
   bind?: string;
   port?: number;
+  tunnel?: boolean;
 }
 
 export async function startHost(opts: HostOptions = {}): Promise<void> {
@@ -20,8 +27,6 @@ export async function startHost(opts: HostOptions = {}): Promise<void> {
     ...(opts.resume ? { resumeSessionId: opts.resume } : {}),
   });
 
-  // Start the WS server before the TUI takes over the terminal — that way
-  // any "address in use" / "permission denied" error is readable on stderr.
   const token = generateToken();
   const server = await startServer({
     session,
@@ -30,20 +35,39 @@ export async function startHost(opts: HostOptions = {}): Promise<void> {
     port: opts.port ?? 0,
   });
 
-  // Kick off the SDK event loop; errors are surfaced via system events.
+  let tunnel: Tunnel | null = null;
+  let joinUrl = server.url;
+  if (opts.tunnel) {
+    process.stderr.write("starting cloudflared tunnel…\n");
+    try {
+      tunnel = await startCloudflaredTunnel(server.port);
+      joinUrl = tunnelJoinUrl(tunnel.publicUrl, token);
+    } catch (err: unknown) {
+      await server.close();
+      if (err instanceof TunnelStartError) {
+        process.stderr.write(`error: ${err.message}\n`);
+        if (err.hint) process.stderr.write(`hint:  ${err.hint}\n`);
+      } else {
+        process.stderr.write(`tunnel error: ${(err as Error)?.message ?? err}\n`);
+      }
+      process.exit(1);
+    }
+  }
+
   const runPromise = session.run().catch((err: unknown) => {
     // eslint-disable-next-line no-console
     console.error("[session]", err);
   });
 
   const { waitUntilExit } = render(
-    React.createElement(App, { session, joinUrl: server.url }),
+    React.createElement(App, { session, joinUrl }),
   );
   try {
     await waitUntilExit();
   } finally {
     await session.stop();
     await server.close();
+    if (tunnel) await tunnel.close();
     await runPromise;
   }
 }

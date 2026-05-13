@@ -17,18 +17,24 @@ program
   .option("--resume <session-id>", "Resume a previous session by id")
   .option("--bind <host>", "Interface to bind the WS server to", "127.0.0.1")
   .option("--port <port>", "Port to bind (0 = random)", (v) => parseInt(v, 10))
+  .option(
+    "--tunnel",
+    "Expose the session publicly via cloudflared (requires cloudflared installed)",
+  )
   .action(
     async (opts: {
       name?: string;
       resume?: string;
       bind?: string;
       port?: number;
+      tunnel?: boolean;
     }) => {
       await startHost({
         ...(opts.name ? { name: opts.name } : {}),
         ...(opts.resume ? { resume: opts.resume } : {}),
         ...(opts.bind ? { bind: opts.bind } : {}),
         ...(opts.port !== undefined ? { port: opts.port } : {}),
+        ...(opts.tunnel ? { tunnel: true } : {}),
       });
     },
   );
