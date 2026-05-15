@@ -186,9 +186,16 @@ export const ComposeBox: React.FC<Props> = ({
       }
     }
 
-    // Multi-line: Ctrl+J or a raw \n insert a newline. Plain Enter submits.
+    // Multi-line: any modifier+Enter inserts a newline; plain Enter submits.
+    // Terminals report this in several ways:
+    //   - `key.shift && key.return` when Ink can parse the modifier
+    //   - raw LF for terminals configured to send `\n` on shift+enter
+    //   - xterm modifyOtherKeys (`CSI 27 ; <mods> ; 13 ~`) used by Ghostty et al.
+    //   - kitty CSI u (`CSI 13 ; <mods> u`)
+    const modifiedEnter =
+      /^\x1b?\[27;\d+;13~$/.test(input) || /^\x1b?\[13;\d+u$/.test(input);
     const wantsNewline =
-      (key.ctrl && (input === "j" || input === "\n")) || input === "\n";
+      (key.shift && key.return) || input === "\n" || modifiedEnter;
     if (wantsNewline) {
       setValue((v) => v + "\n");
       setHistoryIndex(-1);

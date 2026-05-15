@@ -147,7 +147,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
         placeholder={
           thinking
             ? "esc to interrupt — type to queue next prompt"
-            : "type a message and press enter — / commands · @ files · ctrl+j newline · ↑↓ history"
+            : "type a message and press enter — / commands · @ files · shift+enter newline · ↑↓ history"
         }
         slashCommands={slashCommands}
         history={submissionHistory}
