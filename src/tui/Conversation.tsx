@@ -2,10 +2,11 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { CoEvent } from "../types.js";
 
-// Tiny inline-markdown renderer. Splits on `**bold**` pairs and wraps matched
-// spans in <Text bold>. Anything else passes through verbatim.
+// Inline-only markdown: splits on `**bold**` pairs and wraps matched spans
+// in <Text bold>. Used for streaming (mid-flight) text and for the body of
+// text blocks inside a finalized message.
 const BOLD_RE = /(\*\*[^*\n]+?\*\*)/g;
-const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
+const InlineMarkdown: React.FC<{ content: string }> = ({ content }) => {
   const parts = content.split(BOLD_RE);
   return (
     <Text>
@@ -19,6 +20,101 @@ const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
         ),
       )}
     </Text>
+  );
+};
+
+// Block-level parse: extract markdown tables (header row + |---|---| separator
+// + data rows) as discrete blocks; everything else stays as inline text.
+type Block =
+  | { type: "text"; text: string }
+  | { type: "table"; header: string[]; rows: string[][] };
+
+const isTableRow = (line: string): boolean => {
+  const t = line.trim();
+  return t.length >= 2 && t.startsWith("|") && t.endsWith("|");
+};
+const isSeparatorRow = (line: string): boolean => {
+  if (!isTableRow(line)) return false;
+  const inner = line.trim().slice(1, -1);
+  return inner
+    .split("|")
+    .every((cell) => /-/.test(cell) && /^[\s:-]+$/.test(cell));
+};
+const parseRow = (line: string): string[] =>
+  line.trim().slice(1, -1).split("|").map((c) => c.trim());
+
+function parseBlocks(content: string): Block[] {
+  const lines = content.split("\n");
+  const blocks: Block[] = [];
+  let textBuf: string[] = [];
+  const flushText = () => {
+    if (textBuf.length === 0) return;
+    // Trim trailing empty lines bordering a table for a cleaner gap.
+    while (textBuf.length > 0 && textBuf[textBuf.length - 1] === "") textBuf.pop();
+    if (textBuf.length > 0) blocks.push({ type: "text", text: textBuf.join("\n") });
+    textBuf = [];
+  };
+  let i = 0;
+  while (i < lines.length) {
+    if (
+      i + 1 < lines.length &&
+      isTableRow(lines[i] ?? "") &&
+      isSeparatorRow(lines[i + 1] ?? "")
+    ) {
+      flushText();
+      const header = parseRow(lines[i] ?? "");
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i] ?? "")) {
+        rows.push(parseRow(lines[i] ?? ""));
+        i++;
+      }
+      blocks.push({ type: "table", header, rows });
+    } else {
+      textBuf.push(lines[i] ?? "");
+      i++;
+    }
+  }
+  flushText();
+  return blocks;
+}
+
+function renderTable(header: string[], rows: string[][]): string {
+  const cols = Math.max(header.length, ...rows.map((r) => r.length));
+  const widths: number[] = [];
+  for (let c = 0; c < cols; c++) {
+    let w = (header[c] ?? "").length;
+    for (const r of rows) w = Math.max(w, (r[c] ?? "").length);
+    widths.push(w);
+  }
+  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
+  const sep = (l: string, m: string, r: string) =>
+    l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
+  const top = sep("┌", "┬", "┐");
+  const mid = sep("├", "┼", "┤");
+  const bot = sep("└", "┴", "┘");
+  const renderRow = (cells: string[]) =>
+    "│ " + widths.map((w, c) => pad(cells[c] ?? "", w)).join(" │ ") + " │";
+  const out: string[] = [top, renderRow(header), mid];
+  for (const r of rows) out.push(renderRow(r));
+  out.push(bot);
+  return out.join("\n");
+}
+
+// Block-aware renderer: walks block list and renders each. Used for finalized
+// assistant messages where the full content is available.
+const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
+  const blocks = parseBlocks(content);
+  return (
+    <Box flexDirection="column">
+      {blocks.map((b, i) =>
+        b.type === "text" ? (
+          <InlineMarkdown key={i} content={b.text} />
+        ) : (
+          <Text key={i}>{renderTable(b.header, b.rows)}</Text>
+        ),
+      )}
+    </Box>
   );
 };
 
@@ -75,10 +171,11 @@ export const Conversation: React.FC<Props> = ({
         />
       ))}
       {streamingText && (
-        <Box flexDirection="column">
-          <Text color="yellow">claude</Text>
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>claude</Text>
           <Box>
-            <MarkdownText content={streamingText} />
+            <Text color="yellow">⏺ </Text>
+            <InlineMarkdown content={streamingText} />
             <Text color="yellow">▎</Text>
           </Box>
         </Box>
@@ -106,27 +203,27 @@ const EventLine: React.FC<{
   switch (event.type) {
     case "user_prompt": {
       const mine = event.author === myName;
-      if (showAuthorPrefix) {
-        return (
-          <Box flexDirection="column">
-            <Text color={mine ? "cyan" : "magenta"} bold={mine}>
-              [{event.author}]
+      const color = mine ? "cyan" : "magenta";
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>{event.author}</Text>
+          <Box>
+            <Text color={color} bold={mine}>
+              {">"}{" "}
             </Text>
             <Text>{event.content}</Text>
           </Box>
-        );
-      }
-      return (
-        <Box>
-          <Text>{event.content}</Text>
         </Box>
       );
     }
     case "assistant_message":
       return (
-        <Box flexDirection="column">
-          <Text color="yellow">claude</Text>
-          <MarkdownText content={event.content} />
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>claude</Text>
+          <Box>
+            <Text color="yellow">⏺ </Text>
+            <MarkdownText content={event.content} />
+          </Box>
         </Box>
       );
     case "tool_call": {
