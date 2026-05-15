@@ -7,15 +7,18 @@ allowed-tools: Bash(git *) Bash(gh *) Bash(jq *) Bash(cat *) Bash(grep *) Bash(l
 ## Current state
 
 ```!
-echo "=== branch ===" && git rev-parse --abbrev-ref HEAD 2>/dev/null
+# Each line ends with `|| true` so a missing optional file (Cargo.toml,
+# pyproject.toml, etc.) doesn't fail the whole block — ls's exit code 2
+# propagates through `&&` even when stderr is silenced.
+echo "=== branch ===" && git rev-parse --abbrev-ref HEAD 2>/dev/null || true
 echo "=== clean? ===" && git status --short
 echo "=== upstream sync ===" && git status -sb | head -1
 echo "=== last tags ===" && git tag --sort=-version:refname | head -5
-echo "=== remote ===" && git remote get-url origin 2>/dev/null
-echo "=== release workflows ===" && ls .github/workflows/ 2>/dev/null
-echo "=== node version files ===" && ls package.json src/version.ts version.ts lib/version.ts 2>/dev/null
-echo "=== rust version files ===" && ls Cargo.toml 2>/dev/null
-echo "=== python version files ===" && ls pyproject.toml 2>/dev/null
+echo "=== remote ===" && git remote get-url origin 2>/dev/null || true
+echo "=== release workflows ===" && ls .github/workflows/ 2>/dev/null || true
+echo "=== node version files ===" && ls package.json src/version.ts version.ts lib/version.ts 2>/dev/null || true
+echo "=== rust version files ===" && ls Cargo.toml 2>/dev/null || true
+echo "=== python version files ===" && ls pyproject.toml 2>/dev/null || true
 ```
 
 ## What you're doing
