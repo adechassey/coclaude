@@ -35,9 +35,11 @@
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc -p . && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "pnpm build"
   },
   "engines": {
@@ -57,7 +59,8 @@
     "@types/ws": "^8.18.1",
     "react-devtools-core": "^7.0.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   },
   "publishConfig": {
     "access": "public"
