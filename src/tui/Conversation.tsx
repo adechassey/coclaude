@@ -2,6 +2,26 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { CoEvent } from "../types.js";
 
+// Tiny inline-markdown renderer. Splits on `**bold**` pairs and wraps matched
+// spans in <Text bold>. Anything else passes through verbatim.
+const BOLD_RE = /(\*\*[^*\n]+?\*\*)/g;
+const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
+  const parts = content.split(BOLD_RE);
+  return (
+    <Text>
+      {parts.map((p, i) =>
+        p.startsWith("**") && p.endsWith("**") && p.length >= 4 ? (
+          <Text key={i} bold>
+            {p.slice(2, -2)}
+          </Text>
+        ) : (
+          <Text key={i}>{p}</Text>
+        ),
+      )}
+    </Text>
+  );
+};
+
 export interface ToolProgressMap {
   [toolUseId: string]: { toolName: string; elapsedSec: number };
 }
@@ -55,10 +75,12 @@ export const Conversation: React.FC<Props> = ({
         />
       ))}
       {streamingText && (
-        <Box>
-          <Text color="yellow">claude </Text>
-          <Text>{streamingText}</Text>
-          <Text color="yellow">▎</Text>
+        <Box flexDirection="column">
+          <Text color="yellow">claude</Text>
+          <Box>
+            <MarkdownText content={streamingText} />
+            <Text color="yellow">▎</Text>
+          </Box>
         </Box>
       )}
       {lastInflight && !streamingText && (
@@ -84,22 +106,27 @@ const EventLine: React.FC<{
   switch (event.type) {
     case "user_prompt": {
       const mine = event.author === myName;
+      if (showAuthorPrefix) {
+        return (
+          <Box flexDirection="column">
+            <Text color={mine ? "cyan" : "magenta"} bold={mine}>
+              [{event.author}]
+            </Text>
+            <Text>{event.content}</Text>
+          </Box>
+        );
+      }
       return (
         <Box>
-          {showAuthorPrefix && (
-            <Text color={mine ? "cyan" : "magenta"} bold={mine}>
-              [{event.author}]{" "}
-            </Text>
-          )}
           <Text>{event.content}</Text>
         </Box>
       );
     }
     case "assistant_message":
       return (
-        <Box>
-          <Text color="yellow">claude </Text>
-          <Text>{event.content}</Text>
+        <Box flexDirection="column">
+          <Text color="yellow">claude</Text>
+          <MarkdownText content={event.content} />
         </Box>
       );
     case "tool_call": {
@@ -125,13 +152,10 @@ const EventLine: React.FC<{
       );
     }
     case "result":
+      if (event.subtype === "success") return null;
       return (
         <Box>
-          <Text dimColor>
-            · {event.subtype === "success" ? "done" : event.subtype} ·{" "}
-            {event.numTurns} turn{event.numTurns === 1 ? "" : "s"} · $
-            {event.totalCostUsd.toFixed(4)}
-          </Text>
+          <Text color="red">⚠ {event.subtype}</Text>
         </Box>
       );
     case "interrupted":
