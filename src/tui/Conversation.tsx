@@ -172,7 +172,9 @@ export const Conversation: React.FC<Props> = ({
       ))}
       {streamingText && (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>claude</Text>
+          <Text color="yellow" bold>
+            claude
+          </Text>
           <Box>
             <Text color="yellow">⏺ </Text>
             <InlineMarkdown content={streamingText} />
@@ -206,7 +208,9 @@ const EventLine: React.FC<{
       const color = mine ? "cyan" : "magenta";
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>{event.author}</Text>
+          <Text color={color} bold>
+            {event.author}
+          </Text>
           <Box>
             <Text color={color} bold={mine}>
               {">"}{" "}
@@ -219,7 +223,9 @@ const EventLine: React.FC<{
     case "assistant_message":
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>claude</Text>
+          <Text color="yellow" bold>
+            claude
+          </Text>
           <Box>
             <Text color="yellow">⏺ </Text>
             <MarkdownText content={event.content} />
