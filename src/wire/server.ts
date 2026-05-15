@@ -255,6 +255,14 @@ function handleConnection(
       }
       return;
     }
+    if (msg.type === "list_files") {
+      const requestId = msg.requestId;
+      session
+        .listFiles()
+        .then((files) => send({ type: "file_list", requestId, files }))
+        .catch(() => send({ type: "file_list", requestId, files: [] }));
+      return;
+    }
     if (msg.type === "ping") {
       send({ type: "pong" });
       return;

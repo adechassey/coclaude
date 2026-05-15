@@ -63,4 +63,9 @@ export interface SessionView {
   getEvents(): CoEvent[];
   getSlashCommands(): SlashCommand[];
   getParticipants(): Participant[];
+
+  /** List the host repo's project files (git ls-files when available,
+   * otherwise a filtered fs walk). On the joiner this is an RPC over the
+   * wire — so it can fail/time out and return an empty list. */
+  listFiles(): Promise<string[]>;
 }

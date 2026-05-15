@@ -6,7 +6,7 @@
 import type { CoEvent } from "../types.js";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export interface Participant {
   name: string;
@@ -23,6 +23,7 @@ export type ClientMessage =
     }
   | { type: "submit"; content: string }
   | { type: "interrupt"; reason?: string }
+  | { type: "list_files"; requestId: string }
   | { type: "ping" };
 
 // Server → Client
@@ -50,6 +51,7 @@ export type ServerMessage =
       toolName: string;
       elapsedSec: number;
     }
+  | { type: "file_list"; requestId: string; files: string[] }
   | { type: "pong" };
 
 export function encode(msg: ClientMessage | ServerMessage): string {

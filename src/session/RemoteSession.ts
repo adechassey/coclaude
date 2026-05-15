@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { randomUUID } from "node:crypto";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type { CoEvent } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
@@ -46,6 +47,11 @@ export class RemoteSession implements SessionView {
 
   private welcomed = false;
   private opts: RemoteSessionOptions;
+
+  private pendingFileRequests = new Map<
+    string,
+    { resolve: (files: string[]) => void; timer: NodeJS.Timeout }
+  >();
 
   constructor(opts: RemoteSessionOptions) {
     this.opts = opts;
@@ -172,6 +178,20 @@ export class RemoteSession implements SessionView {
     return this.streamingText;
   }
 
+  listFiles(): Promise<string[]> {
+    if (!this.welcomed || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve([]);
+    }
+    const requestId = randomUUID();
+    return new Promise<string[]>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.pendingFileRequests.delete(requestId)) resolve([]);
+      }, 5000);
+      this.pendingFileRequests.set(requestId, { resolve, timer });
+      this.send({ type: "list_files", requestId });
+    });
+  }
+
   close(): void {
     try {
       this.ws.close();
@@ -253,6 +273,15 @@ export class RemoteSession implements SessionView {
         elapsedSec: msg.elapsedSec,
       };
       for (const l of this.toolProgressListeners) l(update);
+      return;
+    }
+    if (msg.type === "file_list") {
+      const pending = this.pendingFileRequests.get(msg.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingFileRequests.delete(msg.requestId);
+        pending.resolve(msg.files);
+      }
       return;
     }
     // pong / unknown — ignore

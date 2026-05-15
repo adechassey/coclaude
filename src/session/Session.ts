@@ -17,6 +17,7 @@ interface StreamEventLike {
 import { randomUUID } from "node:crypto";
 import { EventLog } from "../log/EventLog.js";
 import { findClaudeExecutable } from "../findClaude.js";
+import { listProjectFiles } from "../files.js";
 import type { CoEvent, CoEventInput } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
 import type {
@@ -237,6 +238,10 @@ export class Session implements SessionView {
 
   getParticipants(): Participant[] {
     return this.participants;
+  }
+
+  async listFiles(): Promise<string[]> {
+    return listProjectFiles(process.cwd());
   }
 
   // Host-only API used by the WS gateway --------------------------------
