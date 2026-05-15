@@ -1,6 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useInput, useApp } from "ink";
+import fs from "node:fs";
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+
+const execFileAsync = promisify(execFile);
 
 interface Props {
   onSubmit: (content: string) => void;
@@ -8,6 +14,107 @@ interface Props {
   placeholder?: string;
   slashCommands?: SlashCommand[];
   history?: string[];
+}
+
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  "coverage",
+  ".cache",
+  ".coclaude",
+]);
+const MAX_FILES = 5000;
+
+// Ask git for tracked + untracked-not-ignored files. Honors .gitignore,
+// .git/info/exclude, and the user's global excludes. Returns null if we're
+// not in a git repo or git isn't available.
+async function listFilesFromGit(root: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { cwd: root, maxBuffer: 50 * 1024 * 1024 },
+    );
+    const files = stdout.split("\0").filter(Boolean);
+    return files.slice(0, MAX_FILES);
+  } catch {
+    return null;
+  }
+}
+
+function listFilesManual(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    if (out.length >= MAX_FILES) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= MAX_FILES) return;
+      if (e.name.startsWith(".") && e.name !== ".") continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        walk(full);
+      } else if (e.isFile()) {
+        out.push(path.relative(root, full));
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+async function listFiles(root: string): Promise<string[]> {
+  return (await listFilesFromGit(root)) ?? listFilesManual(root);
+}
+
+// Subsequence fuzzy match with bonuses for word-boundary hits, consecutive
+// runs, and shorter paths. Returns null when query chars don't all appear
+// in order in target.
+function fuzzyScore(query: string, target: string): number | null {
+  if (!query) return 0;
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  let score = 0;
+  let qi = 0;
+  let lastMatch = -1;
+  let consecutive = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] !== q[qi]) continue;
+    const prev = ti === 0 ? "" : t[ti - 1];
+    const boundary = ti === 0 || prev === "/" || prev === "." || prev === "_" || prev === "-";
+    if (boundary) score += 10;
+    if (lastMatch === ti - 1) {
+      consecutive++;
+      score += 5 + consecutive;
+    } else {
+      consecutive = 0;
+    }
+    score += 1;
+    lastMatch = ti;
+    qi++;
+  }
+  if (qi < q.length) return null;
+  return score - target.length * 0.05;
+}
+
+function findActiveAt(value: string): { start: number; query: string } | null {
+  const lastWs = Math.max(
+    value.lastIndexOf(" "),
+    value.lastIndexOf("\n"),
+    value.lastIndexOf("\t"),
+  );
+  const tokenStart = lastWs + 1;
+  const token = value.slice(tokenStart);
+  if (token.length === 0 || token[0] !== "@") return null;
+  return { start: tokenStart, query: token.slice(1) };
 }
 
 export const ComposeBox: React.FC<Props> = ({
@@ -19,11 +126,20 @@ export const ComposeBox: React.FC<Props> = ({
 }) => {
   const [value, setValue] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   // -1 means "not navigating history; current draft"; otherwise index from
   // the end of the history array (0 = most recent).
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [draftBeforeHistory, setDraftBeforeHistory] = useState("");
   const { exit } = useApp();
+
+  const [allFiles, setAllFiles] = useState<string[]>([]);
+  const refreshGen = useRef(0);
+  const refreshFiles = async () => {
+    const gen = ++refreshGen.current;
+    const files = await listFiles(process.cwd());
+    if (gen === refreshGen.current) setAllFiles(files);
+  };
 
   const showPicker = value.startsWith("/") && slashCommands.length > 0;
   const query = value.slice(1).toLowerCase();
@@ -37,8 +153,29 @@ export const ComposeBox: React.FC<Props> = ({
         .slice(0, 8)
     : [];
 
+  const activeAt = showPicker ? null : findActiveAt(value);
+  const showFilePicker = activeAt !== null;
+  const fileQuery = activeAt?.query ?? "";
+  const fileMatches = showFilePicker
+    ? allFiles
+        .map((f) => ({ f, s: fuzzyScore(fileQuery, f) }))
+        .filter((x): x is { f: string; s: number } => x.s !== null)
+        .sort((a, b) => b.s - a.s)
+        .slice(0, 8)
+        .map((x) => x.f)
+    : [];
+
+  useEffect(() => {
+    refreshFiles();
+  }, []);
+
+  useEffect(() => {
+    if (showFilePicker) refreshFiles();
+  }, [showFilePicker]);
+
   useEffect(() => {
     setSelectedIndex(0);
+    setSelectedFileIndex(0);
   }, [value]);
 
   useInput((input, key) => {
@@ -65,9 +202,26 @@ export const ComposeBox: React.FC<Props> = ({
       }
     }
 
-    // Prompt history (only when picker is closed). Up/Down cycle through
-    // prior submissions. Going past the newest goes back to the draft.
-    if (!showPicker && history.length > 0) {
+    // @-file picker
+    if (showFilePicker && fileMatches.length > 0 && activeAt) {
+      if (key.upArrow) {
+        setSelectedFileIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedFileIndex((i) => Math.min(fileMatches.length - 1, i + 1));
+        return;
+      }
+      if (key.tab) {
+        const chosen = fileMatches[selectedFileIndex];
+        if (chosen) setValue(value.slice(0, activeAt.start) + "@" + chosen + " ");
+        return;
+      }
+    }
+
+    // Prompt history (only when neither picker is open). Up/Down cycle
+    // through prior submissions; past the newest, restore the draft.
+    if (!showPicker && !showFilePicker && history.length > 0) {
       if (key.upArrow) {
         setHistoryIndex((i) => {
           const next = i < 0 ? 0 : Math.min(i + 1, history.length - 1);
@@ -144,6 +298,23 @@ export const ComposeBox: React.FC<Props> = ({
               {cmd.description && (
                 <Text dimColor> — {cmd.description}</Text>
               )}
+            </Box>
+          ))}
+          <Text dimColor>
+            ↑↓ select · tab to complete · enter to submit
+          </Text>
+        </Box>
+      )}
+      {showFilePicker && fileMatches.length > 0 && (
+        <Box flexDirection="column" paddingX={2}>
+          {fileMatches.map((f, i) => (
+            <Box key={f}>
+              <Text
+                color={i === selectedFileIndex ? "cyan" : undefined}
+                bold={i === selectedFileIndex}
+              >
+                {i === selectedFileIndex ? "❯ " : "  "}@{f}
+              </Text>
             </Box>
           ))}
           <Text dimColor>
