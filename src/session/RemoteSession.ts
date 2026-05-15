@@ -12,9 +12,12 @@ import {
 } from "../wire/protocol.js";
 import type {
   JoinRequest,
+  PendingApproval,
   SessionView,
-  ToolApprovalRequest,
+  ToolApprovalDecision,
 } from "./SessionView.js";
+import { Topic } from "../util/Topic.js";
+import { Stream } from "../util/Stream.js";
 
 export interface RemoteSessionOptions {
   url: string;
@@ -33,17 +36,14 @@ export class RemoteSession implements SessionView {
   private events: CoEvent[] = [];
   private listeners = new Set<(event: CoEvent) => void>();
 
-  private slashCommands: SlashCommand[] = [];
-  private slashCommandsListeners = new Set<(c: SlashCommand[]) => void>();
-
-  private participants: Participant[] = [];
-  private participantsListeners = new Set<(p: Participant[]) => void>();
-
-  private streamingText = "";
-  private streamListeners = new Set<(text: string) => void>();
-  private toolProgressListeners = new Set<
-    (p: { toolUseId: string; toolName: string; elapsedSec: number }) => void
-  >();
+  private readonly slashCommandsTopic = new Topic<SlashCommand[]>([]);
+  private readonly participantsTopic = new Topic<Participant[]>([]);
+  private readonly streamingTextTopic = new Topic<string>("");
+  private readonly toolProgressStream = new Stream<{
+    toolUseId: string;
+    toolName: string;
+    elapsedSec: number;
+  }>();
 
   private welcomed = false;
   private opts: RemoteSessionOptions;
@@ -94,19 +94,11 @@ export class RemoteSession implements SessionView {
   }
 
   onSlashCommands(listener: (c: SlashCommand[]) => void): () => void {
-    this.slashCommandsListeners.add(listener);
-    if (this.slashCommands.length > 0) listener(this.slashCommands);
-    return () => {
-      this.slashCommandsListeners.delete(listener);
-    };
+    return this.slashCommandsTopic.on(listener);
   }
 
   onParticipants(listener: (p: Participant[]) => void): () => void {
-    this.participantsListeners.add(listener);
-    listener(this.participants);
-    return () => {
-      this.participantsListeners.delete(listener);
-    };
+    return this.participantsTopic.on(listener);
   }
 
   onJoinRequest(_listener: (req: JoinRequest) => void): () => void {
@@ -115,20 +107,30 @@ export class RemoteSession implements SessionView {
     };
   }
 
-  onToolApproval(_listener: (req: ToolApprovalRequest) => void): () => void {
+  onToolApproval(_listener: (req: PendingApproval) => void): () => void {
     return () => {
       // tool approvals are host-only
     };
+  }
+
+  onToolApprovalResolved(_listener: (id: string) => void): () => void {
+    return () => {
+      // tool approvals are host-only
+    };
+  }
+
+  resolveToolApproval(_id: string, _decision: ToolApprovalDecision): void {
+    // host-only; no-op on the joiner side
   }
 
   getEvents(): CoEvent[] {
     return this.events;
   }
   getSlashCommands(): SlashCommand[] {
-    return this.slashCommands;
+    return this.slashCommandsTopic.value;
   }
   getParticipants(): Participant[] {
-    return this.participants;
+    return this.participantsTopic.value;
   }
 
   submitPrompt(content: string): void {
@@ -154,11 +156,7 @@ export class RemoteSession implements SessionView {
   }
 
   onStream(listener: (text: string) => void): () => void {
-    this.streamListeners.add(listener);
-    listener(this.streamingText);
-    return () => {
-      this.streamListeners.delete(listener);
-    };
+    return this.streamingTextTopic.on(listener);
   }
 
   onToolProgress(
@@ -168,14 +166,11 @@ export class RemoteSession implements SessionView {
       elapsedSec: number;
     }) => void,
   ): () => void {
-    this.toolProgressListeners.add(listener);
-    return () => {
-      this.toolProgressListeners.delete(listener);
-    };
+    return this.toolProgressStream.on(listener);
   }
 
   getStreamingText(): string {
-    return this.streamingText;
+    return this.streamingTextTopic.value;
   }
 
   listFiles(): Promise<string[]> {
@@ -234,12 +229,10 @@ export class RemoteSession implements SessionView {
       this._hostName = msg.hostName;
       this._myName = msg.yourName;
       this.events = msg.events;
-      this.slashCommands = msg.slashCommands;
-      this.participants = msg.participants;
       // Dispatch snapshot to any early subscribers.
       for (const e of this.events) for (const l of this.listeners) l(e);
-      for (const l of this.slashCommandsListeners) l(this.slashCommands);
-      for (const l of this.participantsListeners) l(this.participants);
+      this.slashCommandsTopic.set(msg.slashCommands);
+      this.participantsTopic.set(msg.participants);
       return;
     }
     if (msg.type === "event") {
@@ -248,31 +241,29 @@ export class RemoteSession implements SessionView {
       return;
     }
     if (msg.type === "commands") {
-      this.slashCommands = msg.slashCommands;
-      for (const l of this.slashCommandsListeners) l(this.slashCommands);
+      this.slashCommandsTopic.set(msg.slashCommands);
       return;
     }
     if (msg.type === "participants") {
-      this.participants = msg.participants;
-      for (const l of this.participantsListeners) l(this.participants);
+      this.participantsTopic.set(msg.participants);
       return;
     }
     if (msg.type === "stream") {
       if (msg.reset) {
-        this.streamingText = msg.delta ?? "";
+        this.streamingTextTopic.set(msg.delta ?? "");
       } else if (msg.delta !== undefined) {
-        this.streamingText = this.streamingText + msg.delta;
+        this.streamingTextTopic.set(
+          this.streamingTextTopic.value + msg.delta,
+        );
       }
-      for (const l of this.streamListeners) l(this.streamingText);
       return;
     }
     if (msg.type === "tool_progress") {
-      const update = {
+      this.toolProgressStream.emit({
         toolUseId: msg.toolUseId,
         toolName: msg.toolName,
         elapsedSec: msg.elapsedSec,
-      };
-      for (const l of this.toolProgressListeners) l(update);
+      });
       return;
     }
     if (msg.type === "file_list") {

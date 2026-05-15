@@ -10,13 +10,16 @@ export interface JoinRequest {
   resolve(decision: "approve" | "deny", reason?: string): void;
 }
 
-export interface ToolApprovalRequest {
+// A serializable record of an in-flight tool-call approval request — no
+// resolver function attached, so the same shape crosses both in-process and
+// (future) wire boundaries. Subscribers resolve by id via
+// SessionView.resolveToolApproval.
+export interface PendingApproval {
   id: string;
   author: string;
   toolName: string;
   input: unknown;
   currentScope: Scope;
-  resolve(decision: ToolApprovalDecision): void;
 }
 
 export interface ToolApprovalDecision {
@@ -42,7 +45,14 @@ export interface SessionView {
   onParticipants(listener: (participants: Participant[]) => void): () => void;
   // Host-only. Joiner implementations return a no-op unsubscribe.
   onJoinRequest(listener: (req: JoinRequest) => void): () => void;
-  onToolApproval(listener: (req: ToolApprovalRequest) => void): () => void;
+  onToolApproval(listener: (req: PendingApproval) => void): () => void;
+  // Fires when a pending approval settles for any reason (host decision,
+  // 60s timeout, abort). The TUI uses this to dismiss the approval card
+  // when the gate resolved internally.
+  onToolApprovalResolved(listener: (id: string) => void): () => void;
+  // Resolve a pending approval by id. Host-only — joiner implementations
+  // are no-ops since approvals don't yet cross the wire.
+  resolveToolApproval(id: string, decision: ToolApprovalDecision): void;
 
   submitPrompt(content: string): void;
   interrupt(reason?: string): void;

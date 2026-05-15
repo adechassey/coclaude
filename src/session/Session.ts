@@ -7,14 +7,8 @@ import {
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 
-// Shape of the streaming events we care about — a structural subset of
-// Anthropic's BetaRawMessageStreamEvent so we don't have to import its full
-// type tree.
-interface StreamEventLike {
-  type: string;
-  delta?: { type?: string; text?: string };
-}
 import { randomUUID } from "node:crypto";
+import { translate } from "../sdk/translate.js";
 import { EventLog } from "../log/EventLog.js";
 import { findClaudeExecutable } from "../findClaude.js";
 import { listProjectFiles } from "../files.js";
@@ -22,20 +16,18 @@ import type { CoEvent, CoEventInput } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
 import type {
   JoinRequest,
+  PendingApproval,
   SessionView,
   ToolApprovalDecision,
-  ToolApprovalRequest,
 } from "./SessionView.js";
-import {
-  DEFAULT_SCOPE,
-  isInScope,
-  parseScope,
-  type Scope,
-} from "../policy/scopes.js";
+import { parseScope } from "../policy/scopes.js";
 import {
   COCLAUDE_COMMAND_NAMES,
   COCLAUDE_COMMANDS,
 } from "../policy/slashCommands.js";
+import { Authorizer } from "../policy/Authorizer.js";
+import { Topic } from "../util/Topic.js";
+import { Stream } from "../util/Stream.js";
 
 export interface SessionOptions {
   hostName: string;
@@ -63,29 +55,27 @@ export class Session implements SessionView {
   private events: CoEvent[] = [];
   private listeners = new Set<EventListener>();
 
-  private slashCommands: SlashCommand[] = COCLAUDE_COMMANDS;
-  private slashCommandsListeners = new Set<(commands: SlashCommand[]) => void>();
-
-  private participants: Participant[] = [];
-  private participantsListeners = new Set<(p: Participant[]) => void>();
-
-  private queueListeners = new Set<(depth: number) => void>();
+  private readonly slashCommandsTopic = new Topic<SlashCommand[]>(
+    COCLAUDE_COMMANDS,
+  );
+  private readonly participantsTopic = new Topic<Participant[]>([]);
+  private readonly queueDepthTopic = new Topic<number>(0);
 
   // Transient streaming state — not persisted to disk or events array.
-  private streamingText = "";
-  private streamListeners = new Set<(text: string) => void>();
-  private toolProgressListeners = new Set<
-    (p: { toolUseId: string; toolName: string; elapsedSec: number }) => void
-  >();
+  private readonly streamingTextTopic = new Topic<string>("");
+  private readonly toolProgressStream = new Stream<{
+    toolUseId: string;
+    toolName: string;
+    elapsedSec: number;
+  }>();
 
   // Ring buffer cap. Older events live on disk only.
   private static readonly RING_BUFFER_SIZE = 500;
 
-  private scopes = new Map<string, Scope>();
+  private readonly authorizer: Authorizer;
 
-  private joinRequestListeners = new Set<(req: JoinRequest) => void>();
-  private toolApprovalListeners = new Set<(req: ToolApprovalRequest) => void>();
-  private kickListeners = new Set<(name: string) => void>();
+  private readonly joinRequestStream = new Stream<JoinRequest>();
+  private readonly kickStream = new Stream<string>();
 
   private userQueue: QueuedPrompt[] = [];
   private waiter: ((entry: QueuedPrompt | null) => void) | null = null;
@@ -111,6 +101,10 @@ export class Session implements SessionView {
     this.currentAuthor = opts.hostName;
     this.resumeSessionId = opts.resumeSessionId;
     this.sessionId = opts.resumeSessionId ?? randomUUID();
+    this.authorizer = new Authorizer({
+      hostName: opts.hostName,
+      emit: (e) => this.emit(e),
+    });
     const logPath = EventLog.defaultPath(this.sessionId);
 
     let initialNextSeq = 0;
@@ -148,39 +142,23 @@ export class Session implements SessionView {
   }
 
   onSlashCommands(listener: (commands: SlashCommand[]) => void): () => void {
-    this.slashCommandsListeners.add(listener);
-    if (this.slashCommands.length > 0) listener(this.slashCommands);
-    return () => {
-      this.slashCommandsListeners.delete(listener);
-    };
+    return this.slashCommandsTopic.on(listener);
   }
 
   onParticipants(listener: (p: Participant[]) => void): () => void {
-    this.participantsListeners.add(listener);
-    listener(this.participants);
-    return () => {
-      this.participantsListeners.delete(listener);
-    };
+    return this.participantsTopic.on(listener);
   }
 
   onQueueChange(listener: (depth: number) => void): () => void {
-    this.queueListeners.add(listener);
-    listener(this.userQueue.length);
-    return () => {
-      this.queueListeners.delete(listener);
-    };
+    return this.queueDepthTopic.on(listener);
   }
 
   private notifyQueue(): void {
-    for (const l of this.queueListeners) l(this.userQueue.length);
+    this.queueDepthTopic.set(this.userQueue.length);
   }
 
   onStream(listener: (text: string) => void): () => void {
-    this.streamListeners.add(listener);
-    listener(this.streamingText);
-    return () => {
-      this.streamListeners.delete(listener);
-    };
+    return this.streamingTextTopic.on(listener);
   }
 
   onToolProgress(
@@ -190,20 +168,15 @@ export class Session implements SessionView {
       elapsedSec: number;
     }) => void,
   ): () => void {
-    this.toolProgressListeners.add(listener);
-    return () => {
-      this.toolProgressListeners.delete(listener);
-    };
+    return this.toolProgressStream.on(listener);
   }
 
   getStreamingText(): string {
-    return this.streamingText;
+    return this.streamingTextTopic.value;
   }
 
   private setStreaming(text: string): void {
-    if (this.streamingText === text) return;
-    this.streamingText = text;
-    for (const l of this.streamListeners) l(text);
+    this.streamingTextTopic.set(text);
   }
 
   private notifyToolProgress(p: {
@@ -211,21 +184,23 @@ export class Session implements SessionView {
     toolName: string;
     elapsedSec: number;
   }): void {
-    for (const l of this.toolProgressListeners) l(p);
+    this.toolProgressStream.emit(p);
   }
 
   onJoinRequest(listener: (req: JoinRequest) => void): () => void {
-    this.joinRequestListeners.add(listener);
-    return () => {
-      this.joinRequestListeners.delete(listener);
-    };
+    return this.joinRequestStream.on(listener);
   }
 
-  onToolApproval(listener: (req: ToolApprovalRequest) => void): () => void {
-    this.toolApprovalListeners.add(listener);
-    return () => {
-      this.toolApprovalListeners.delete(listener);
-    };
+  onToolApproval(listener: (req: PendingApproval) => void): () => void {
+    return this.authorizer.onApprovalRequest(listener);
+  }
+
+  onToolApprovalResolved(listener: (id: string) => void): () => void {
+    return this.authorizer.onApprovalResolved(listener);
+  }
+
+  resolveToolApproval(id: string, decision: ToolApprovalDecision): void {
+    this.authorizer.resolveApproval(id, decision);
   }
 
   getEvents(): CoEvent[] {
@@ -233,11 +208,11 @@ export class Session implements SessionView {
   }
 
   getSlashCommands(): SlashCommand[] {
-    return this.slashCommands;
+    return this.slashCommandsTopic.value;
   }
 
   getParticipants(): Participant[] {
-    return this.participants;
+    return this.participantsTopic.value;
   }
 
   async listFiles(): Promise<string[]> {
@@ -247,38 +222,34 @@ export class Session implements SessionView {
   // Host-only API used by the WS gateway --------------------------------
 
   publishJoinRequest(req: JoinRequest): void {
-    for (const l of this.joinRequestListeners) l(req);
+    this.joinRequestStream.emit(req);
   }
 
   addParticipant(name: string): void {
-    if (this.participants.some((p) => p.name === name)) return;
-    this.participants = [
-      ...this.participants,
+    const current = this.participantsTopic.value;
+    if (current.some((p) => p.name === name)) return;
+    this.authorizer.initParticipant(name);
+    this.participantsTopic.set([
+      ...current,
       { name, connectedAt: Date.now() },
-    ];
-    if (!this.scopes.has(name)) this.scopes.set(name, DEFAULT_SCOPE);
-    for (const l of this.participantsListeners) l(this.participants);
+    ]);
   }
 
   removeParticipant(name: string): void {
-    const before = this.participants.length;
-    this.participants = this.participants.filter((p) => p.name !== name);
-    this.scopes.delete(name);
-    if (this.participants.length !== before) {
-      for (const l of this.participantsListeners) l(this.participants);
+    const current = this.participantsTopic.value;
+    const next = current.filter((p) => p.name !== name);
+    this.authorizer.forgetParticipant(name);
+    if (next.length !== current.length) {
+      this.participantsTopic.set(next);
     }
   }
 
-  getScope(name: string): Scope {
-    if (name === this.hostName) return "unrestricted";
-    return this.scopes.get(name) ?? DEFAULT_SCOPE;
+  getScope(name: string): import("../policy/scopes.js").Scope {
+    return this.authorizer.getScope(name);
   }
 
   onKick(listener: (name: string) => void): () => void {
-    this.kickListeners.add(listener);
-    return () => {
-      this.kickListeners.delete(listener);
-    };
+    return this.kickStream.on(listener);
   }
 
   // Prompt submission ---------------------------------------------------
@@ -373,23 +344,21 @@ export class Session implements SessionView {
       });
       return;
     }
-    if (!this.participants.some((p) => p.name === name)) {
+    const result = this.authorizer.grant({
+      name,
+      scope,
+      by: author,
+      participantExists: this.participantsTopic.value.some(
+        (p) => p.name === name,
+      ),
+    });
+    if (!result.ok) {
       this.emit({
         type: "system",
         subtype: "command_error",
-        payload: {
-          command: "grant",
-          message: `no participant named '${name}'`,
-        },
+        payload: { command: "grant", message: result.reason },
       });
-      return;
     }
-    this.scopes.set(name, scope);
-    this.emit({
-      type: "system",
-      subtype: "scope_changed",
-      payload: { name, scope, by: author },
-    });
   }
 
   private cmdRevoke(args: string[], author: string): void {
@@ -402,23 +371,20 @@ export class Session implements SessionView {
       });
       return;
     }
-    if (!this.participants.some((p) => p.name === name)) {
+    const result = this.authorizer.revoke({
+      name,
+      by: author,
+      participantExists: this.participantsTopic.value.some(
+        (p) => p.name === name,
+      ),
+    });
+    if (!result.ok) {
       this.emit({
         type: "system",
         subtype: "command_error",
-        payload: {
-          command: "revoke",
-          message: `no participant named '${name}'`,
-        },
+        payload: { command: "revoke", message: result.reason },
       });
-      return;
     }
-    this.scopes.set(name, DEFAULT_SCOPE);
-    this.emit({
-      type: "system",
-      subtype: "scope_changed",
-      payload: { name, scope: DEFAULT_SCOPE, by: author },
-    });
   }
 
   private cmdKick(args: string[], author: string): void {
@@ -431,7 +397,7 @@ export class Session implements SessionView {
       });
       return;
     }
-    if (!this.participants.some((p) => p.name === name)) {
+    if (!this.participantsTopic.value.some((p) => p.name === name)) {
       this.emit({
         type: "system",
         subtype: "command_error",
@@ -442,7 +408,7 @@ export class Session implements SessionView {
       });
       return;
     }
-    for (const l of this.kickListeners) l(name);
+    this.kickStream.emit(name);
     this.emit({
       type: "system",
       subtype: "kicked",
@@ -453,9 +419,9 @@ export class Session implements SessionView {
   private cmdWho(_author: string): void {
     const rows = [
       { name: this.hostName, scope: "host" as const },
-      ...this.participants.map((p) => ({
+      ...this.participantsTopic.value.map((p) => ({
         name: p.name,
-        scope: this.scopes.get(p.name) ?? DEFAULT_SCOPE,
+        scope: this.authorizer.getScope(p.name),
       })),
     ];
     this.emit({
@@ -581,170 +547,32 @@ export class Session implements SessionView {
     return this.userQueue.length;
   }
 
-  private async canUseTool(
+  private canUseTool(
     toolName: string,
     input: Record<string, unknown>,
     options: { signal: AbortSignal; toolUseID: string },
   ): Promise<PermissionResult> {
-    const author = this.currentAuthor;
-    if (author === this.hostName) {
-      // Host's own turns bypass — governed by their settings.json.
-      return { behavior: "allow", updatedInput: input };
-    }
-    const scope = this.getScope(author);
-    if (isInScope(toolName, scope)) {
-      this.emit({
-        type: "system",
-        subtype: "tool_auto_approved",
-        payload: { author, toolName, scope, toolUseId: options.toolUseID },
-      });
-      return { behavior: "allow", updatedInput: input };
-    }
-
-    const decision = await new Promise<ToolApprovalDecision>((resolve) => {
-      let settled = false;
-      const settle = (d: ToolApprovalDecision) => {
-        if (settled) return;
-        settled = true;
-        resolve(d);
-      };
-      const req: ToolApprovalRequest = {
-        id: randomUUID(),
-        author,
-        toolName,
-        input,
-        currentScope: scope,
-        resolve: settle,
-      };
-      for (const l of this.toolApprovalListeners) l(req);
-      // Auto-deny after 60s if the host doesn't decide.
-      const timer = setTimeout(
-        () => settle({ decision: "deny", reason: "approval timed out (60s)" }),
-        60_000,
-      );
-      options.signal.addEventListener("abort", () => {
-        clearTimeout(timer);
-        settle({ decision: "deny", reason: "aborted" });
-      });
+    return this.authorizer.decide({
+      author: this.currentAuthor,
+      toolName,
+      input,
+      toolUseId: options.toolUseID,
+      signal: options.signal,
     });
-
-    if (decision.promoteScope) {
-      this.scopes.set(author, decision.promoteScope);
-      this.emit({
-        type: "system",
-        subtype: "scope_changed",
-        payload: {
-          name: author,
-          scope: decision.promoteScope,
-          by: this.hostName,
-        },
-      });
-    }
-
-    this.emit({
-      type: "system",
-      subtype:
-        decision.decision === "approve" ? "tool_approved" : "tool_denied",
-      payload: {
-        author,
-        toolName,
-        toolUseId: options.toolUseID,
-        reason: decision.reason,
-      },
-    });
-
-    if (decision.decision === "approve") {
-      return { behavior: "allow", updatedInput: input };
-    }
-    return {
-      behavior: "deny",
-      message: decision.reason ?? "denied by host",
-    };
   }
 
   private handleSdkMessage(msg: SDKMessage): void {
-    if (msg.type === "stream_event") {
-      const e = (msg as unknown as { event: StreamEventLike }).event;
-      this.handleStreamEvent(e);
-      return;
-    }
-    if ((msg as { type: string }).type === "tool_progress") {
-      const tp = msg as unknown as {
-        tool_use_id: string;
-        tool_name: string;
-        elapsed_time_seconds: number;
-      };
-      this.notifyToolProgress({
-        toolUseId: tp.tool_use_id,
-        toolName: tp.tool_name,
-        elapsedSec: tp.elapsed_time_seconds,
-      });
-      return;
-    }
-    if (msg.type === "assistant") {
-      // Final assistant message landed — clear streaming buffer.
+    const { events, streamingDelta, toolProgress } = translate(
+      msg,
+      this.currentAuthor,
+    );
+    for (const e of events) this.emit(e);
+    if (streamingDelta?.kind === "reset") {
       this.setStreaming("");
-      const m = (msg as unknown as { message: { content: unknown } }).message;
-      const text = extractText(m.content);
-      if (text) this.emit({ type: "assistant_message", content: text });
-      for (const t of extractToolUses(m.content)) {
-        this.emit({
-          type: "tool_call",
-          toolName: t.name,
-          toolUseId: t.id,
-          input: t.input,
-          author: this.currentAuthor,
-        });
-      }
-      return;
+    } else if (streamingDelta?.kind === "append") {
+      this.setStreaming(this.streamingTextTopic.value + streamingDelta.text);
     }
-    if (msg.type === "user") {
-      const m = (msg as unknown as { message: { content: unknown } }).message;
-      for (const tr of extractToolResults(m.content)) {
-        this.emit({
-          type: "tool_result",
-          toolUseId: tr.tool_use_id,
-          content: tr.content,
-          ...(tr.is_error ? { isError: true } : {}),
-        });
-      }
-      return;
-    }
-    if (msg.type === "result") {
-      const r = msg as unknown as {
-        subtype: string;
-        duration_ms: number;
-        total_cost_usd: number;
-        num_turns: number;
-      };
-      this.emit({
-        type: "result",
-        subtype: r.subtype,
-        durationMs: r.duration_ms,
-        totalCostUsd: r.total_cost_usd,
-        numTurns: r.num_turns,
-      });
-      return;
-    }
-    const sys = msg as { type: string; subtype?: string };
-    this.emit({
-      type: "system",
-      subtype: sys.subtype ?? msg.type,
-      payload: msg,
-    });
-  }
-
-  private handleStreamEvent(e: StreamEventLike): void {
-    if (e.type === "message_start") {
-      this.setStreaming("");
-      return;
-    }
-    if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
-      const text = e.delta.text ?? "";
-      if (text) this.setStreaming(this.streamingText + text);
-      return;
-    }
-    // content_block_start, content_block_stop, message_delta, message_stop — ignore for v1
+    if (toolProgress) this.notifyToolProgress(toolProgress);
   }
 
   private emit(event: CoEventInput): void {
@@ -759,8 +587,7 @@ export class Session implements SessionView {
 
   private setSlashCommands(commands: SlashCommand[]): void {
     // Coclaude's commands always appear first in the picker.
-    this.slashCommands = [...COCLAUDE_COMMANDS, ...commands];
-    for (const l of this.slashCommandsListeners) l(this.slashCommands);
+    this.slashCommandsTopic.set([...COCLAUDE_COMMANDS, ...commands]);
   }
 
   async stop(): Promise<void> {
@@ -774,41 +601,4 @@ export class Session implements SessionView {
     this.abortController.abort();
     await this.eventLog.close();
   }
-}
-
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b: { type?: string }) => b?.type === "text")
-    .map((b: { text?: string }) => b.text ?? "")
-    .join("");
-}
-
-function extractToolUses(
-  content: unknown,
-): Array<{ id: string; name: string; input: unknown }> {
-  if (!Array.isArray(content)) return [];
-  return content
-    .filter((b: { type?: string }) => b?.type === "tool_use")
-    .map((b: { id: string; name: string; input: unknown }) => ({
-      id: b.id,
-      name: b.name,
-      input: b.input,
-    }));
-}
-
-function extractToolResults(
-  content: unknown,
-): Array<{ tool_use_id: string; content: unknown; is_error?: boolean }> {
-  if (!Array.isArray(content)) return [];
-  return content
-    .filter((b: { type?: string }) => b?.type === "tool_result")
-    .map(
-      (b: { tool_use_id: string; content: unknown; is_error?: boolean }) => ({
-        tool_use_id: b.tool_use_id,
-        content: b.content,
-        ...(b.is_error !== undefined ? { is_error: b.is_error } : {}),
-      }),
-    );
 }

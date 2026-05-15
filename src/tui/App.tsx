@@ -4,7 +4,7 @@ import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
   SessionView,
   JoinRequest,
-  ToolApprovalRequest,
+  PendingApproval,
 } from "../session/SessionView.js";
 import type { CoEvent } from "../types.js";
 import type { Participant } from "../wire/protocol.js";
@@ -37,7 +37,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
   );
   const [toolProgress, setToolProgress] = useState<ToolProgressMap>({});
   const [pendingJoins, setPendingJoins] = useState<JoinRequest[]>([]);
-  const [pendingTools, setPendingTools] = useState<ToolApprovalRequest[]>([]);
+  const [pendingTools, setPendingTools] = useState<PendingApproval[]>([]);
   const [submissionHistory, setSubmissionHistory] = useState<string[]>([]);
 
   useEffect(() => {
@@ -78,6 +78,9 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
     const offToolReq = session.onToolApproval((req) => {
       setPendingTools((prev) => [...prev, req]);
     });
+    const offToolResolved = session.onToolApprovalResolved((id) => {
+      setPendingTools((prev) => prev.filter((r) => r.id !== id));
+    });
     return () => {
       offEvents();
       offCommands();
@@ -87,6 +90,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
       offToolProgress();
       offJoinReq();
       offToolReq();
+      offToolResolved();
     };
   }, [session]);
 
@@ -134,6 +138,9 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
       {!currentJoin && currentTool && (
         <ToolApproval
           request={currentTool}
+          onResolve={(decision) =>
+            session.resolveToolApproval(currentTool.id, decision)
+          }
           onResolved={() =>
             setPendingTools((prev) =>
               prev.filter((r) => r.id !== currentTool.id),

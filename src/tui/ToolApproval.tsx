@@ -1,22 +1,30 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { Box, Text, useInput } from "ink";
-import type { ToolApprovalRequest } from "../session/SessionView.js";
+import type {
+  PendingApproval,
+  ToolApprovalDecision,
+} from "../session/SessionView.js";
 
 interface Props {
-  request: ToolApprovalRequest;
+  request: PendingApproval;
+  onResolve: (decision: ToolApprovalDecision) => void;
   onResolved: () => void;
 }
 
-export const ToolApproval: React.FC<Props> = ({ request, onResolved }) => {
+export const ToolApproval: React.FC<Props> = ({
+  request,
+  onResolve,
+  onResolved,
+}) => {
   useInput((input) => {
     const k = input.toLowerCase();
     if (k === "a") {
-      request.resolve({ decision: "approve" });
+      onResolve({ decision: "approve" });
       onResolved();
       return;
     }
     if (k === "d") {
-      request.resolve({ decision: "deny" });
+      onResolve({ decision: "deny" });
       onResolved();
       return;
     }
@@ -24,22 +32,14 @@ export const ToolApproval: React.FC<Props> = ({ request, onResolved }) => {
       // Approve once + promote scope so future calls auto-approve.
       const next = nextScope(request.currentScope);
       if (next) {
-        request.resolve({ decision: "approve", promoteScope: next });
+        onResolve({ decision: "approve", promoteScope: next });
       } else {
-        request.resolve({ decision: "approve" });
+        onResolve({ decision: "approve" });
       }
       onResolved();
       return;
     }
   });
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      request.resolve({ decision: "deny", reason: "approval timed out (60s)" });
-      onResolved();
-    }, 60_000);
-    return () => clearTimeout(timer);
-  }, [request, onResolved]);
 
   const inputPreview = formatInput(request.input);
 
@@ -70,8 +70,8 @@ export const ToolApproval: React.FC<Props> = ({ request, onResolved }) => {
 };
 
 function nextScope(
-  current: ToolApprovalRequest["currentScope"],
-): ToolApprovalRequest["currentScope"] | null {
+  current: PendingApproval["currentScope"],
+): PendingApproval["currentScope"] | null {
   switch (current) {
     case "readonly":
       return "edits";
