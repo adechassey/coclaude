@@ -151,6 +151,7 @@ export const App: React.FC<Props> = ({ session, joinUrl }) => {
         }
         slashCommands={slashCommands}
         history={submissionHistory}
+        listFiles={() => session.listFiles()}
       />
     </Box>
   );

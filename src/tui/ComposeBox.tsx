@@ -1,12 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useInput, useApp } from "ink";
-import fs from "node:fs";
-import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
-
-const execFileAsync = promisify(execFile);
 
 interface Props {
   onSubmit: (content: string) => void;
@@ -14,65 +8,7 @@ interface Props {
   placeholder?: string;
   slashCommands?: SlashCommand[];
   history?: string[];
-}
-
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".next",
-  "coverage",
-  ".cache",
-  ".coclaude",
-]);
-const MAX_FILES = 5000;
-
-// Ask git for tracked + untracked-not-ignored files. Honors .gitignore,
-// .git/info/exclude, and the user's global excludes. Returns null if we're
-// not in a git repo or git isn't available.
-async function listFilesFromGit(root: string): Promise<string[] | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { cwd: root, maxBuffer: 50 * 1024 * 1024 },
-    );
-    const files = stdout.split("\0").filter(Boolean);
-    return files.slice(0, MAX_FILES);
-  } catch {
-    return null;
-  }
-}
-
-function listFilesManual(root: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string) => {
-    if (out.length >= MAX_FILES) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (out.length >= MAX_FILES) return;
-      if (e.name.startsWith(".") && e.name !== ".") continue;
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue;
-        walk(full);
-      } else if (e.isFile()) {
-        out.push(path.relative(root, full));
-      }
-    }
-  };
-  walk(root);
-  return out;
-}
-
-async function listFiles(root: string): Promise<string[]> {
-  return (await listFilesFromGit(root)) ?? listFilesManual(root);
+  listFiles: () => Promise<string[]>;
 }
 
 // Subsequence fuzzy match with bonuses for word-boundary hits, consecutive
@@ -123,6 +59,7 @@ export const ComposeBox: React.FC<Props> = ({
   placeholder,
   slashCommands = [],
   history = [],
+  listFiles,
 }) => {
   const [value, setValue] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -133,11 +70,16 @@ export const ComposeBox: React.FC<Props> = ({
   const [draftBeforeHistory, setDraftBeforeHistory] = useState("");
   const { exit } = useApp();
 
+  // Files are fetched lazily — only when the @-picker first opens within a
+  // turn. We invalidate after each submit so the next turn sees fresh state.
+  // On joiners this is an RPC; on the host it's a local git ls-files.
   const [allFiles, setAllFiles] = useState<string[]>([]);
+  const filesFetched = useRef(false);
   const refreshGen = useRef(0);
   const refreshFiles = async () => {
     const gen = ++refreshGen.current;
-    const files = await listFiles(process.cwd());
+    filesFetched.current = true;
+    const files = await listFiles();
     if (gen === refreshGen.current) setAllFiles(files);
   };
 
@@ -166,11 +108,7 @@ export const ComposeBox: React.FC<Props> = ({
     : [];
 
   useEffect(() => {
-    refreshFiles();
-  }, []);
-
-  useEffect(() => {
-    if (showFilePicker) refreshFiles();
+    if (showFilePicker && !filesFetched.current) refreshFiles();
   }, [showFilePicker]);
 
   useEffect(() => {
@@ -265,6 +203,10 @@ export const ComposeBox: React.FC<Props> = ({
         setSelectedIndex(0);
         setHistoryIndex(-1);
         setDraftBeforeHistory("");
+        // Invalidate the file cache so the next turn re-fetches the host's
+        // current state (file may have been created/deleted by the prior turn).
+        filesFetched.current = false;
+        setAllFiles([]);
       }
       return;
     }
