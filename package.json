@@ -1,6 +1,6 @@
 {
   "name": "coclaude",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Multiplayer Claude Code — pair-program with teammates inside the same Claude Code session",
   "keywords": [
